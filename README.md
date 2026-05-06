@@ -113,13 +113,6 @@ If you are rebuilding the form/classes from this folder export:
 3. Ensure your form contains an Edge browser control named `WebBrowser0`.
 4. Keep `calendar.html` in the same folder as `Calendar.accdb` (or adjust navigation path).
 
-## Important Filename Note
-
-The form shell in `cls/vba_form_code_behind.txt` currently declares:
-
-```vba
-Private Const CALENDAR_NAME As String = "calendar.html"
-```
 
 ## Standalone UI Mode
 
