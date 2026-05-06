@@ -1,0 +1,117 @@
+' =============================================================================
+' clsCalendarGroupRepo
+' Data-access class for tblCalendarGroups.  Manages add / rename / soft-delete
+' of calendar groups.
+'
+' Depends on: clsJSONHelper  (for ExtractValue, Escape)
+'
+' Usage:
+'   Dim gr As New clsCalendarGroupRepo
+'   gr.Init New clsJSONHelper
+'   Dim newId As String
+'   newId = gr.Add(jsonStr)
+' =============================================================================
+Option Compare Database
+Option Explicit
+
+Private m_JSON As clsJSONHelper
+
+' -----------------------------------------------------------------------------
+' Init  -  inject utility dependencies (call once after New)
+' -----------------------------------------------------------------------------
+Public Sub Init(jh As clsJSONHelper)
+    Set m_JSON = jh
+End Sub
+
+' =============================================================================
+' Add  -  create a new calendar group row
+' Returns: the new GroupID (string)
+' =============================================================================
+Public Function Add(ByVal jsonStr As String) As String
+    Dim db As DAO.Database: Set db = CurrentDb
+
+    Dim gName As String: gName = m_JSON.ExtractValue(jsonStr, "name")
+    If Len(Trim(gName)) = 0 Then gName = "New Group"
+
+    Dim rs As DAO.Recordset
+    Set rs = db.OpenRecordset("tblCalendarGroups", dbOpenDynaset)
+    rs.AddNew
+    rs!GroupName = gName
+    rs.Update
+
+    rs.MoveLast
+    Dim newId As String: newId = CStr(rs!GroupID)
+    rs.Close: Set rs = Nothing: Set db = Nothing
+
+    Add = newId
+End Function
+
+' =============================================================================
+' Rename  -  rename an existing calendar group
+' =============================================================================
+Public Sub Rename(ByVal jsonStr As String)
+    Dim db As DAO.Database: Set db = CurrentDb
+
+    Dim gId   As String: gId = m_JSON.ExtractValue(jsonStr, "id")
+    Dim gName As String: gName = m_JSON.ExtractValue(jsonStr, "name")
+
+    If Len(gId) = 0 Or Not IsNumeric(gId) Then Exit Sub
+    If Len(Trim(gName)) = 0 Then Exit Sub
+
+    db.Execute _
+        "UPDATE tblCalendarGroups SET GroupName = """ & _
+        Replace(gName, """", """""") & """ " & _
+        "WHERE GroupID = " & CLng(gId), dbFailOnError
+
+    Set db = Nothing
+End Sub
+
+' =============================================================================
+' Delete  -  soft-delete a calendar group.
+' Calendars in the group get their GroupID cleared (moved to ungrouped).
+' =============================================================================
+Public Sub Delete(ByVal jsonStr As String)
+    Dim db As DAO.Database: Set db = CurrentDb
+
+    Dim gId As String: gId = m_JSON.ExtractValue(jsonStr, "id")
+    If Len(gId) = 0 Or Not IsNumeric(gId) Then Exit Sub
+
+    Dim gIdNum As Long: gIdNum = CLng(gId)
+
+    ' Clear GroupID on calendars that belonged to this group
+    db.Execute _
+        "UPDATE tblCalendars SET GroupID = Null " & _
+        "WHERE GroupID = '" & Replace(CStr(gIdNum), "'", "''") & "'", dbFailOnError
+
+    ' Soft-delete the group
+    db.Execute _
+        "UPDATE tblCalendarGroups SET IsDeleted = True " & _
+        "WHERE GroupID = " & gIdNum, dbFailOnError
+
+    Set db = Nothing
+End Sub
+
+' =============================================================================
+' MoveCalendar  -  move a calendar into (or out of) a group
+' =============================================================================
+Public Sub MoveCalendar(ByVal jsonStr As String)
+    Dim db As DAO.Database: Set db = CurrentDb
+
+    Dim calId   As String: calId = m_JSON.ExtractValue(jsonStr, "calendarId")
+    Dim groupId As String: groupId = m_JSON.ExtractValue(jsonStr, "groupId")
+
+    If Len(calId) = 0 Or Not IsNumeric(calId) Then Exit Sub
+
+    Dim sql As String
+    If Len(groupId) = 0 Or groupId = "null" Or groupId = "" Then
+        sql = "UPDATE tblCalendars SET GroupID = Null " & _
+              "WHERE CalendarID = " & CLng(calId)
+    Else
+        sql = "UPDATE tblCalendars SET GroupID = '" & _
+              Replace(groupId, "'", "''") & "' " & _
+              "WHERE CalendarID = " & CLng(calId)
+    End If
+
+    db.Execute sql, dbFailOnError
+    Set db = Nothing
+End Sub

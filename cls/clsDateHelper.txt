@@ -1,0 +1,57 @@
+' =============================================================================
+' clsDateHelper
+' Pure utility class for date/time conversions and calendar math.
+'
+' Usage:
+'   Dim dh As New clsDateHelper
+'   Debug.Print dh.ISOToDate("2026-03-11")          ' -> 3/11/2026
+'   Debug.Print dh.HMToTime("14:30")                ' -> 2:30:00 PM
+'   Debug.Print dh.GetNthWeekdayOfMonth(2026, 3, 2, 5)  ' 2nd Friday of Mar 2026
+' =============================================================================
+Option Compare Database
+Option Explicit
+
+' -----------------------------------------------------------------------------
+' ISOToDate  -  converts "YYYY-MM-DD" string to a VBA Date
+' -----------------------------------------------------------------------------
+Public Function ISOToDate(ByVal iso As String) As Date
+    ISOToDate = DateSerial(CInt(Left$(iso, 4)), CInt(Mid$(iso, 6, 2)), CInt(Right$(iso, 2)))
+End Function
+
+' -----------------------------------------------------------------------------
+' HMToTime  -  converts "HH:nn" string to a VBA Date (time-only)
+' -----------------------------------------------------------------------------
+Public Function HMToTime(ByVal hm As String) As Date
+    HMToTime = TimeSerial(CInt(Left$(hm, 2)), CInt(Right$(hm, 2)), 0)
+End Function
+
+' -----------------------------------------------------------------------------
+' GetNthWeekdayOfMonth  -  e.g. "second Friday of March 2026"
+'   weekOrd:   1-4 = first-fourth, -1 = last
+'   targetDOW: 0=Sun .. 6=Sat  (JavaScript convention)
+' -----------------------------------------------------------------------------
+Public Function GetNthWeekdayOfMonth(yr As Integer, mn As Integer, _
+                                      weekOrd As Integer, targetDOW As Integer) As Date
+    If weekOrd = -1 Then
+        ' Last occurrence: walk backwards from end of month
+        Dim ld As Date: ld = DateSerial(yr, mn + 1, 0)
+        Do While Weekday(ld, vbSunday) - 1 <> targetDOW: ld = ld - 1: Loop
+        GetNthWeekdayOfMonth = ld
+    Else
+        ' Nth occurrence: walk forwards from 1st of month
+        Dim fd As Date: fd = DateSerial(yr, mn, 1)
+        Dim cnt As Integer: cnt = 0
+        Dim d As Date: d = fd
+        Do While Month(d) = mn
+            If Weekday(d, vbSunday) - 1 = targetDOW Then
+                cnt = cnt + 1
+                If cnt = weekOrd Then GetNthWeekdayOfMonth = d: Exit Function
+            End If
+            d = d + 1
+        Loop
+        ' Fallback: return last occurrence found in the month
+        d = d - 1
+        Do While Month(d) = mn And Weekday(d, vbSunday) - 1 <> targetDOW: d = d - 1: Loop
+        GetNthWeekdayOfMonth = d
+    End If
+End Function

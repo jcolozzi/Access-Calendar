@@ -1,0 +1,195 @@
+' =============================================================================
+' clsCalendarRepo
+' Data-access class for tblCalendars.  Manages add / soft-delete and tracks
+' the active calendar ID.
+'
+' Depends on: clsJSONHelper  (for ExtractValue)
+'             clsDateHelper  (for HMToTime)
+'
+' Usage:
+'   Dim cr As New clsCalendarRepo
+'   cr.Init New clsJSONHelper, New clsDateHelper
+'   Dim newId As String
+'   newId = cr.Add(jsonStr)
+' =============================================================================
+Option Compare Database
+Option Explicit
+
+Private m_JSON As clsJSONHelper
+Private m_Date As clsDateHelper
+Private m_ActiveCalendarID As String
+Private m_OpenCalendarIds As String   ' comma-separated open calendar IDs
+
+' -----------------------------------------------------------------------------
+' Init  -  inject utility dependencies (call once after New)
+' -----------------------------------------------------------------------------
+Public Sub Init(jh As clsJSONHelper, dh As clsDateHelper)
+    Set m_JSON = jh
+    Set m_Date = dh
+End Sub
+
+' -----------------------------------------------------------------------------
+' ActiveCalendarID  -  read/write property replacing sActiveCalendarID
+' -----------------------------------------------------------------------------
+Public Property Get ActiveCalendarID() As String
+    ActiveCalendarID = m_ActiveCalendarID
+End Property
+
+Public Property Let ActiveCalendarID(ByVal value As String)
+    m_ActiveCalendarID = value
+End Property
+
+' -----------------------------------------------------------------------------
+' OpenCalendarIds  -  comma-separated list of currently visible calendar IDs
+' -----------------------------------------------------------------------------
+Public Property Get OpenCalendarIds() As String
+    OpenCalendarIds = m_OpenCalendarIds
+End Property
+
+Public Property Let OpenCalendarIds(ByVal value As String)
+    m_OpenCalendarIds = value
+End Property
+
+' =============================================================================
+' SetActiveCalendar  -  JS fired when user clicks a radio button
+' =============================================================================
+Public Sub SetActiveCalendar(ByVal jsonStr As String)
+    Dim scId As String
+    scId = m_JSON.ExtractValue(jsonStr, "calendarId")
+    If scId <> "" Then m_ActiveCalendarID = scId
+End Sub
+
+' =============================================================================
+' SetOpenCalendars  -  JS fired when user toggles calendar checkboxes
+' =============================================================================
+Public Sub SetOpenCalendars(ByVal jsonStr As String)
+    Dim ids As String
+    ids = m_JSON.ExtractValue(jsonStr, "calendarIds")
+    Dim pid As String
+    pid = m_JSON.ExtractValue(jsonStr, "primaryId")
+    If ids <> "" Then m_OpenCalendarIds = ids
+    If pid <> "" Then m_ActiveCalendarID = pid
+End Sub
+
+' =============================================================================
+' Add  -  create a new calendar row
+' Returns: the new CalendarID (string) — also sets ActiveCalendarID
+' =============================================================================
+Public Function Add(ByVal jsonStr As String) As String
+    Dim db As DAO.Database: Set db = CurrentDb
+
+    Dim cName      As String: cName = m_JSON.ExtractValue(jsonStr, "name")
+    Dim cWorkStart As String: cWorkStart = Nz(m_JSON.ExtractValue(jsonStr, "workStart"), "")
+    Dim cWorkEnd   As String: cWorkEnd = Nz(m_JSON.ExtractValue(jsonStr, "workEnd"), "")
+    Dim cGroupId   As String: cGroupId = Nz(m_JSON.ExtractValue(jsonStr, "groupId"), "")
+    Dim cColor     As String: cColor = Nz(m_JSON.ExtractValue(jsonStr, "color"), "")
+
+    Dim rs As DAO.Recordset
+    Set rs = db.OpenRecordset("tblCalendars", dbOpenDynaset)
+    rs.AddNew
+    rs!CalendarName = cName
+    If cWorkStart <> "" Then rs!WorkStartTime = m_Date.HMToTime(cWorkStart)
+    If cWorkEnd <> "" Then rs!WorkEndTime = m_Date.HMToTime(cWorkEnd)
+    If cGroupId <> "" And cGroupId <> "null" Then rs!GroupID = cGroupId
+    If cColor <> "" Then rs!Color = cColor
+    rs.Update
+
+    rs.MoveLast
+    Dim newCalId As String: newCalId = CStr(rs!CalendarID)
+    rs.Close: Set rs = Nothing: Set db = Nothing
+
+    m_ActiveCalendarID = newCalId
+    Add = newCalId
+End Function
+
+' =============================================================================
+' Edit  -  update a calendar's name, work hours, and group assignment
+' =============================================================================
+Public Sub Edit(ByVal jsonStr As String)
+    Dim db As DAO.Database: Set db = CurrentDb
+
+    Dim cId        As String: cId = m_JSON.ExtractValue(jsonStr, "id")
+    Dim cName      As String: cName = m_JSON.ExtractValue(jsonStr, "name")
+    Dim cWorkStart As String: cWorkStart = Nz(m_JSON.ExtractValue(jsonStr, "workStart"), "")
+    Dim cWorkEnd   As String: cWorkEnd = Nz(m_JSON.ExtractValue(jsonStr, "workEnd"), "")
+    Dim cColor     As String: cColor = Nz(m_JSON.ExtractValue(jsonStr, "color"), "")
+
+    If Len(cId) = 0 Or Not IsNumeric(cId) Then Exit Sub
+    If Len(Trim(cName)) = 0 Then Exit Sub
+
+    Dim rs As DAO.Recordset
+    Set rs = db.OpenRecordset( _
+        "SELECT * FROM tblCalendars WHERE CalendarID = " & CLng(cId), dbOpenDynaset)
+    If rs.EOF Then
+        rs.Close: Set rs = Nothing: Set db = Nothing
+        Exit Sub
+    End If
+
+    rs.Edit
+    rs!CalendarName = cName
+    If cWorkStart <> "" Then
+        rs!WorkStartTime = m_Date.HMToTime(cWorkStart)
+    Else
+        rs!WorkStartTime = Null
+    End If
+    If cWorkEnd <> "" Then
+        rs!WorkEndTime = m_Date.HMToTime(cWorkEnd)
+    Else
+        rs!WorkEndTime = Null
+    End If
+    If cColor <> "" Then rs!Color = cColor
+    rs.Update
+    rs.Close: Set rs = Nothing: Set db = Nothing
+End Sub
+
+' =============================================================================
+' Delete  -  soft-delete a calendar and all its appointments
+' Returns: the first remaining CalendarID (to become the new active)
+' =============================================================================
+Public Function Delete(ByVal jsonStr As String) As String
+    Dim db As DAO.Database: Set db = CurrentDb
+
+    Dim delIdText As String: delIdText = m_JSON.ExtractValue(jsonStr, "id")
+    delIdText = Replace(delIdText, """", "")   ' defensive cleanup
+
+    If Len(delIdText) = 0 Or Not IsNumeric(delIdText) Then
+        Delete = "": Exit Function
+    End If
+
+    Dim delIdNum As Long: delIdNum = CLng(delIdText)
+
+    ' Soft-delete the calendar (CalendarID is Number type)
+    db.Execute _
+        "UPDATE tblCalendars SET IsDeleted = True " & _
+        "WHERE CalendarID = " & delIdNum, dbFailOnError
+
+    ' Soft-delete its appointments (CalendarID is ShortText type)
+    db.Execute _
+        "UPDATE tblAppointments SET IsDeleted = True, ModifiedOn = Now() " & _
+        "WHERE CalendarID = '" & Replace(CStr(delIdNum), "'", "''") & "'", dbFailOnError
+
+    ' Find first remaining calendar
+    Dim rsFirst As DAO.Recordset
+    Set rsFirst = db.OpenRecordset( _
+        "SELECT MIN(CalendarID) AS MinID FROM tblCalendars WHERE IsDeleted = False", _
+        dbOpenSnapshot)
+    Dim firstId As String
+    If Not rsFirst.EOF Then firstId = Nz(rsFirst!MinID, "")
+    rsFirst.Close: Set rsFirst = Nothing: Set db = Nothing
+
+    m_ActiveCalendarID = firstId
+    Delete = firstId
+End Function
+
+' =============================================================================
+' EnsureActiveCalendar  -  if no active calendar is set, default to the first
+' available one.  Called during SendDataToCalendar.
+' =============================================================================
+Public Sub EnsureActiveCalendar(ByVal firstCalId As String)
+    If m_ActiveCalendarID = "" And firstCalId <> "" Then
+        m_ActiveCalendarID = firstCalId
+    End If
+    If m_OpenCalendarIds = "" And m_ActiveCalendarID <> "" Then
+        m_OpenCalendarIds = m_ActiveCalendarID
+    End If
+End Sub

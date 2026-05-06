@@ -1,0 +1,111 @@
+' =============================================================================
+' clsJSONHelper
+' Pure utility class for JSON operations: escaping, value extraction, and
+' building recurring-occurrence JSON objects.
+'
+' Usage:
+'   Dim jh As New clsJSONHelper
+'   Debug.Print jh.Escape("line1" & vbCrLf & "line2")
+'   Debug.Print jh.ExtractValue(jsonStr, "title")
+' =============================================================================
+Option Compare Database
+Option Explicit
+
+' -----------------------------------------------------------------------------
+' Escape  -  makes a string safe for embedding inside a JSON string value
+' -----------------------------------------------------------------------------
+Public Function Escape(ByVal varValue As Variant) As String
+    If IsNull(varValue) Then Escape = "": Exit Function
+    Dim s As String
+    s = CStr(varValue)
+    s = Replace(s, "\", "\\")
+    s = Replace(s, """", "\""")
+    s = Replace(s, vbCrLf, "\n")
+    s = Replace(s, vbCr, "\n")
+    s = Replace(s, vbLf, "\n")
+    s = Replace(s, vbTab, "\t")
+    Escape = s
+End Function
+
+' -----------------------------------------------------------------------------
+' ExtractValue  -  lightweight JSON key lookup (no external library needed)
+' Returns the value associated with "key" in a flat JSON object string.
+' Handles both quoted-string and unquoted (numeric / boolean) values.
+' -----------------------------------------------------------------------------
+Public Function ExtractValue(ByVal jsonStr As String, ByVal key As String) As String
+    Dim p As Long, colonPos As Long, startPos As Long, endPos As Long
+    Dim searchKey As String
+
+    searchKey = """" & key & """"
+    p = InStr(1, jsonStr, searchKey, vbTextCompare)
+    If p = 0 Then Exit Function
+
+    colonPos = InStr(p + Len(searchKey), jsonStr, ":")
+    If colonPos = 0 Then Exit Function
+
+    startPos = colonPos + 1
+
+    ' Skip whitespace after colon
+    Do While startPos <= Len(jsonStr) And _
+             (Mid$(jsonStr, startPos, 1) = " " Or _
+              Mid$(jsonStr, startPos, 1) = vbTab Or _
+              Mid$(jsonStr, startPos, 1) = vbCr Or _
+              Mid$(jsonStr, startPos, 1) = vbLf)
+        startPos = startPos + 1
+    Loop
+
+    If startPos > Len(jsonStr) Then Exit Function
+
+    If Mid$(jsonStr, startPos, 1) = """" Then
+        ' Quoted string value
+        startPos = startPos + 1
+        endPos = InStr(startPos, jsonStr, """")
+        If endPos = 0 Then Exit Function
+        ExtractValue = Mid$(jsonStr, startPos, endPos - startPos)
+    Else
+        ' Unquoted value (number, boolean, null)
+        endPos = InStr(startPos, jsonStr, ",")
+        If endPos = 0 Then endPos = InStr(startPos, jsonStr, "}")
+        If endPos = 0 Then Exit Function
+        ExtractValue = Trim$(Mid$(jsonStr, startPos, endPos - startPos))
+    End If
+End Function
+
+' -----------------------------------------------------------------------------
+' BuildOccJSON  -  builds one virtual recurring-occurrence JSON object
+' -----------------------------------------------------------------------------
+Public Function BuildOccJSON(mID As Long, dStr As String, _
+    calId As String, tEsc As String, sStr As String, eStr As String, _
+    aDStr As String, clStr As String, nEsc As String, _
+    rType As String, rInt As Integer, rDOW As String, rMMode As String, _
+    rMDay As Integer, rMWeek As Integer, rMDOW As Integer, _
+    rEType As String, rEDStr As String, rECnt As Integer, rSStr As String, _
+    reminderMins As Integer) As String
+
+    BuildOccJSON = "{" & _
+        """id"":""r" & mID & "_" & dStr & """," & _
+        """recurMasterId"":" & mID & "," & _
+        """calendarId"":""" & calId & """," & _
+        """title"":""" & tEsc & """," & _
+        """date"":""" & dStr & """," & _
+        """start"":""" & sStr & """," & _
+        """end"":""" & eStr & """," & _
+        """allDay"":" & aDStr & "," & _
+        """color"":""" & clStr & """," & _
+        """notes"":""" & nEsc & """," & _
+        """isRecurring"":true," & _
+        """recurType"":""" & rType & """," & _
+        """recurInterval"":" & rInt & "," & _
+        """recurDaysOfWeek"":""" & rDOW & """," & _
+        """recurMonthlyMode"":""" & rMMode & """," & _
+        """recurMonthDay"":" & rMDay & "," & _
+        """recurMonthWeek"":" & rMWeek & "," & _
+        """recurMonthDOW"":" & rMDOW & "," & _
+        """recurEndType"":""" & rEType & """," & _
+        """recurEndDate"":""" & rEDStr & """," & _
+        """recurCount"":" & rECnt & "," & _
+        """recurRangeStart"":""" & rSStr & """," & _
+        """reminderMinutes"":" & reminderMins & _
+        "}"
+
+End Function

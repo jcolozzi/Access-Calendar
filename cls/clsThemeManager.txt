@@ -1,0 +1,73 @@
+' =============================================================================
+' clsThemeManager
+' Tracks the dark/light mode preference in memory and syncs it from the
+' browser's localStorage when needed.
+'
+' Depends on: clsJSONHelper  (for ExtractValue)
+'
+' Usage:
+'   Dim th As New clsThemeManager
+'   th.Init New clsJSONHelper
+'   th.SetTheme jsonStr
+'   Debug.Print th.DarkMode   ' True / False
+' =============================================================================
+Option Compare Database
+Option Explicit
+
+Private m_JSON     As clsJSONHelper
+Private m_DarkMode As Boolean
+
+' -----------------------------------------------------------------------------
+' Init  -  inject utility dependencies (call once after New)
+' -----------------------------------------------------------------------------
+Public Sub Init(jh As clsJSONHelper)
+    Set m_JSON = jh
+End Sub
+
+' -----------------------------------------------------------------------------
+' DarkMode  -  read/write property replacing sDarkMode form-level variable
+' -----------------------------------------------------------------------------
+Public Property Get DarkMode() As Boolean
+    DarkMode = m_DarkMode
+End Property
+
+Public Property Let DarkMode(ByVal value As Boolean)
+    m_DarkMode = value
+End Property
+
+' =============================================================================
+' SetTheme  -  called when user clicks the dark/light toggle
+' =============================================================================
+Public Sub SetTheme(ByVal jsonStr As String)
+    m_DarkMode = (m_JSON.ExtractValue(jsonStr, "dark") = "true")
+End Sub
+
+' =============================================================================
+' SyncFromBrowser  -  reads the theme from localStorage via the browser control
+'   wbCtl: a reference to the WebBrowser0 control on the form
+' =============================================================================
+Public Sub SyncFromBrowser(ByVal wbCtl As Object)
+    On Error Resume Next
+
+    Dim raw       As String
+    Dim themeText As String
+
+    raw = Nz(wbCtl.RetrieveJavascriptValue( _
+        "localStorage.getItem('accessCalendarTheme')"), "")
+
+    themeText = Trim$(raw)
+
+    ' Strip surrounding quotes if present
+    If Left$(themeText, 1) = """" And Right$(themeText, 1) = """" Then
+        themeText = Mid$(themeText, 2, Len(themeText) - 2)
+    End If
+
+    themeText = LCase$(themeText)
+
+    Select Case themeText
+        Case "dark":  m_DarkMode = True
+        Case "light": m_DarkMode = False
+    End Select
+
+    On Error GoTo 0
+End Sub

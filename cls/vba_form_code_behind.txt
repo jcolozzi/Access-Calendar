@@ -1,0 +1,111 @@
+' =============================================================================
+' Form code-behind  (thin shell — all logic lives in class modules)
+'
+' Class modules required (paste each .txt into a new Access class module):
+'   clsJSONHelper, clsDateHelper, clsRecurrenceEngine,
+'   clsAppointmentRepo, clsCalendarRepo, clsCalendarGroupRepo,
+'   clsThemeManager, clsReminderManager, clsJSBridge, clsCommandProcessor
+' =============================================================================
+Option Compare Database
+Option Explicit
+
+' --- Singleton class instances -----------------------------------------------
+Private m_Bridge     As clsJSBridge
+Private m_CmdProc    As clsCommandProcessor
+Private m_Reminders  As clsReminderManager
+Private m_Processing As Boolean
+
+Private Const CALENDAR_NAME As String = "calendarv27.html"
+
+' =============================================================================
+' Form events
+' =============================================================================
+
+Private Sub Form_Load()
+    DoCmd.Maximize
+
+    ' -- Phase 1: utilities ---------------------------------------------------
+    Dim jh As New clsJSONHelper
+    Dim dh As New clsDateHelper
+
+    ' -- Phase 2: recurrence engine -------------------------------------------
+    Dim re As New clsRecurrenceEngine
+    re.Init jh, dh
+
+    ' -- Phase 3: data-access repos -------------------------------------------
+    Dim ar As New clsAppointmentRepo:  ar.Init jh, dh
+    Dim cr As New clsCalendarRepo:     cr.Init jh, dh
+    Dim gr As New clsCalendarGroupRepo: gr.Init jh
+
+    ' -- Phase 4: managers ----------------------------------------------------
+    Dim th As New clsThemeManager:     th.Init jh
+    Set m_Reminders = New clsReminderManager
+    m_Reminders.Init re
+
+    ' -- Phase 5: JS bridge ---------------------------------------------------
+    Set m_Bridge = New clsJSBridge
+    m_Bridge.Init Me.WebBrowser0, jh, re, cr, th
+
+    ' -- Phase 6: command processor -------------------------------------------
+    Set m_CmdProc = New clsCommandProcessor
+    m_CmdProc.Init jh, ar, cr, gr, th
+
+    ' -- Navigate to calendar HTML --------------------------------------------
+    Me.WebBrowser0.Navigate "https://msaccess/" & CurrentProject.Path & "\" & CALENDAR_NAME
+    Me.TimerInterval = 300
+End Sub
+
+Private Sub WebBrowser0_DocumentComplete(URL As Variant)
+    If InStr(1, URL, CALENDAR_NAME, vbTextCompare) > 0 Then
+        On Error GoTo DCErr
+        m_Bridge.SendDataToCalendar
+        Exit Sub
+    End If
+    Exit Sub
+DCErr:
+    Debug.Print "DocumentComplete/SendData error " & Err.Number & ": " & Err.Description
+    m_Bridge.ExecuteJS _
+        "setStatus('error','Load error " & Err.Number & ": " & _
+        Replace(Err.Description, "'", "") & "');"
+End Sub
+
+Private Sub Form_Timer()
+    If m_Processing Then Exit Sub
+    m_Processing = True
+    On Error GoTo EH
+
+    ' Check appointment reminders each tick
+    On Error Resume Next
+    m_Reminders.CheckAll
+    On Error GoTo EH
+
+    ' Poll for a pending JS command
+    Dim cmd As String
+    cmd = m_Bridge.GetPendingCommand()
+    If cmd = "" Then GoTo ExitHere
+
+    ' Dispatch and reload if needed
+    Dim restoreCalId As String
+    restoreCalId = m_CmdProc.ProcessCommand(cmd)
+
+    If restoreCalId <> "NORELOAD" Then
+        DoEvents
+        m_Bridge.SendDataToCalendar restoreCalId
+    End If
+
+ExitHere:
+    m_Processing = False
+    Exit Sub
+
+EH:
+    Debug.Print "Form_Timer error " & Err.Number & ": " & Err.Description
+    m_Bridge.ExecuteJS _
+        "setStatus('error','VBA Err " & Err.Number & ": " & _
+        Replace(Err.Description, "'", "") & "');"
+    Resume ExitHere
+End Sub
+
+' Manual refresh entry point (can be called from a form button, etc.)
+Public Sub RefreshCalendar()
+    m_Bridge.SendDataToCalendar
+End Sub

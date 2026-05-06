@@ -1,0 +1,184 @@
+' =============================================================================
+' clsReminderManager
+' Checks for due reminders each timer tick and fires popup notifications.
+' Non-recurring: tracked via ReminderFired DB field (persistent across sessions).
+' Recurring:     tracked via in-memory Collection (session-scoped).
+'
+' Depends on: clsRecurrenceEngine  (for GetDatesInWindow)
+'
+' Usage:
+'   Dim rm As New clsReminderManager
+'   rm.Init New clsRecurrenceEngine   ' (engine must already be Init'd)
+'   rm.CheckAll                        ' call from Form_Timer
+' =============================================================================
+Option Compare Database
+Option Explicit
+
+Private m_RecurEngine         As clsRecurrenceEngine
+Private m_FiredRecurReminders As Collection
+
+' -----------------------------------------------------------------------------
+' Init  -  inject dependencies and set up session state (call once after New)
+' -----------------------------------------------------------------------------
+Public Sub Init(re As clsRecurrenceEngine)
+    Set m_RecurEngine = re
+    Set m_FiredRecurReminders = New Collection
+End Sub
+
+' =============================================================================
+' CheckAll  -  main entry point, called every Form_Timer tick
+' =============================================================================
+Public Sub CheckAll()
+    On Error Resume Next
+
+    Dim db    As DAO.Database
+    Dim rs    As DAO.Recordset
+    Dim dtNow As Date
+    dtNow = Now()
+    Set db = CurrentDb
+
+    ' -- Non-recurring ---------------------------------------------------------
+    Set rs = db.OpenRecordset( _
+        "SELECT AppointmentID, Title, StartApptDate, StartTime, ReminderMinutes, ReminderFired " & _
+        "FROM tblAppointments " & _
+        "WHERE IsDeleted = False " & _
+        "  AND Nz(ReminderMinutes,-1) >= 0 " & _
+        "  AND (ReminderFired = False OR ReminderFired IS NULL) " & _
+        "  AND (RecurType = 'none' OR RecurType = '' OR RecurType IS NULL) " & _
+        "  AND StartApptDate >= Date() - 1 " & _
+        "  AND StartApptDate <= Date() + 7", dbOpenDynaset)
+
+    Do Until rs.EOF
+        If Not IsNull(rs!StartApptDate) And Not IsNull(rs!StartTime) Then
+            Dim apptDT  As Date
+            Dim remMins As Integer
+            Dim remDT   As Date
+            apptDT = rs!StartApptDate + rs!StartTime
+            remMins = CInt(Nz(rs!ReminderMinutes, 0))
+            remDT = apptDT - (CDbl(remMins) / 1440#)
+            ' Fire if reminder time passed AND event hasn't ended more than 2 hours ago
+            If remDT <= dtNow And apptDT >= dtNow - (2# / 24#) Then
+                rs.Edit
+                rs!ReminderFired = True
+                rs.Update
+                ShowPopup CStr(Nz(rs!Title, "(No Title)")), apptDT, remMins
+            End If
+        End If
+        rs.MoveNext
+    Loop
+    rs.Close
+
+    ' -- Recurring -------------------------------------------------------------
+    Set rs = db.OpenRecordset( _
+        "SELECT AppointmentID, Title, StartApptDate, StartTime, ReminderMinutes, " & _
+        "       RecurType, RecurInterval, RecurDaysOfWeek, RecurMonthlyMode, " & _
+        "       RecurMonthDay, RecurMonthWeek, RecurMonthDOW, " & _
+        "       RecurEndType, RecurEndDate, RecurCount, RecurExceptions, ReminderMinutes, ReminderFired " & _
+        "FROM tblAppointments " & _
+        "WHERE IsDeleted = False " & _
+        "  AND Nz(ReminderMinutes,-1) >= 0 " & _
+        "  AND RecurType NOT IN ('none','') " & _
+        "  AND RecurType IS NOT NULL", dbOpenSnapshot)
+
+    Do Until rs.EOF
+        Dim rMins2 As Integer
+        rMins2 = CInt(Nz(rs!ReminderMinutes, -1))
+        If rMins2 >= 0 Then
+            CheckRecurRecord rs, dtNow, rMins2
+        End If
+        rs.MoveNext
+    Loop
+    rs.Close
+
+    Set db = Nothing
+    On Error GoTo 0
+End Sub
+
+' =============================================================================
+' PRIVATE HELPERS
+' =============================================================================
+
+' -----------------------------------------------------------------------------
+' CheckRecurRecord  -  expands one recurring master for the next 8 days and
+' fires popups for any occurrences whose reminder time has passed.
+' -----------------------------------------------------------------------------
+Private Sub CheckRecurRecord(ByVal rsA As DAO.Recordset, _
+                              ByVal dtNow As Date, _
+                              ByVal remMins As Integer)
+    If IsNull(rsA!StartApptDate) Then Exit Sub
+
+    Dim sTime As Date
+    sTime = IIf(IsNull(rsA!StartTime), TimeSerial(9, 0, 0), rsA!StartTime)
+
+    Dim mID  As Long:  mID = rsA!AppointmentID
+    Dim winS As Date:  winS = Date - 1
+    Dim winE As Date:  winE = Date + 8
+
+    Dim occDates As New Collection
+    m_RecurEngine.GetDatesInWindow rsA, winS, winE, occDates
+
+    Dim i       As Integer
+    Dim occD    As Date
+    Dim occDT   As Date
+    Dim remDT   As Date
+    Dim fireKey As String
+
+    For i = 1 To occDates.Count
+        occD = occDates(i)
+        occDT = occD + sTime
+        remDT = occDT - (CDbl(remMins) / 1440#)
+
+        If remDT <= dtNow And occDT >= dtNow - (2# / 24#) Then
+            fireKey = CStr(mID) & "_" & Format(occD, "yyyy-mm-dd")
+            If Not CollectionContains(fireKey) Then
+                m_FiredRecurReminders.Add fireKey, fireKey
+                ShowPopup CStr(Nz(rsA!Title, "(No Title)")), occDT, remMins
+            End If
+        End If
+    Next i
+End Sub
+
+' -----------------------------------------------------------------------------
+' CollectionContains  -  True if the key exists in m_FiredRecurReminders
+' -----------------------------------------------------------------------------
+Private Function CollectionContains(ByVal key As String) As Boolean
+    On Error Resume Next
+    Dim v As Variant
+    v = m_FiredRecurReminders(key)
+    CollectionContains = (Err.Number = 0)
+    On Error GoTo 0
+End Function
+
+' -----------------------------------------------------------------------------
+' ShowPopup  -  displays a formatted reminder message box
+' -----------------------------------------------------------------------------
+Private Sub ShowPopup(ByVal sTitle As String, _
+                       ByVal apptDT As Date, _
+                       ByVal remMins As Integer)
+    Dim timeStr As String:  timeStr = Format(apptDT, "h:nn AM/PM")
+    Dim dateStr As String:  dateStr = Format(apptDT, "dddd, mmmm d, yyyy")
+    Dim leadStr As String
+    Dim msg     As String
+
+    Select Case True
+        Case remMins = 0
+            leadStr = "This appointment is starting now."
+        Case remMins < 60
+            leadStr = "Starts in " & remMins & " minute" & IIf(remMins = 1, "", "s") & "."
+        Case remMins < 1440
+            Dim hrs  As Integer: hrs = remMins \ 60
+            Dim mins As Integer: mins = remMins Mod 60
+            leadStr = "Starts in " & hrs & " hour" & IIf(hrs = 1, "", "s")
+            If mins > 0 Then leadStr = leadStr & " " & mins & " min"
+            leadStr = leadStr & "."
+        Case Else
+            Dim days As Integer: days = remMins \ 1440
+            leadStr = "Starts in " & days & " day" & IIf(days = 1, "", "s") & "."
+    End Select
+
+    msg = sTitle & vbCrLf & vbCrLf & _
+          "When:   " & dateStr & "  " & timeStr & vbCrLf & vbCrLf & _
+          leadStr
+
+    MsgBox msg, vbInformation + vbSystemModal, "  Calendar Reminder"
+End Sub
