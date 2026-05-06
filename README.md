@@ -1,6 +1,6 @@
 # Access Calendar
 
-![Platform](https://img.shields.io/badge/Platform-Microsoft%20Access-00599C)
+![Platform](https://img.shields.io/badge/Platform-Microsoft%20Access-00599)
 ![UI](https://img.shields.io/badge/UI-Calendar%20WebView2-2563EB)
 ![Features](https://img.shields.io/badge/Features-Recurring%20Events%20%7C%20Reminders-7C3AED)
 ![Status](https://img.shields.io/badge/Status-Active-22C55E)
@@ -20,9 +20,10 @@ It brings a polished scheduling interface to Access while keeping your data and 
 
 ## Screenshots
 
-![Calendar month view placeholder](https://placehold.co/1200x675/png?text=Access+Calendar+Month+View)
-![Calendar week view placeholder](https://placehold.co/1200x675/png?text=Access+Calendar+Week+View)
-![Calendar settings placeholder](https://placehold.co/1200x675/png?text=Access+Calendar+Settings)
+![Calendar month view placeholder](https://github.com/jcolozzi/Access-Calendar/blob/main/images/month-view.png)
+![Calendar week view placeholder](https://github.com/jcolozzi/Access-Calendar/blob/main/images/week-view.png)
+![Calendar day view placeholder](https://github.com/jcolozzi/Access-Calendar/blob/main/images/day-view.png)
+![Calendar settings placeholder](https://github.com/jcolozzi/Access-Calendar/blob/main/images/settings-view.png)
 
 ## Quick Start
 
