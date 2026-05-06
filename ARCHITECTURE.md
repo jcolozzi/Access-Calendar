@@ -64,7 +64,7 @@ Private Sub Form_Load()
     m_CmdProc.Init jh, ar, cr, gr, th
     
     ' Navigate WebView2 to HTML file
-    Me.WebBrowser0.Navigate "https://msaccess/" & CurrentProject.Path & "\calendarv27.html"
+    Me.WebBrowser0.Navigate "https://msaccess/" & CurrentProject.Path & "\calendar.html"
     Me.TimerInterval = 300  ' Poll every 300ms
 End Sub
 ```
@@ -111,7 +111,7 @@ Public Sub SendDataToCalendar(Optional restoreCalId As String = "")
 End Sub
 ```
 
-**In JavaScript (calendarv27.html):**
+**In JavaScript (calendar.html):**
 
 ```javascript
 window.loadData = function(json) {
@@ -490,7 +490,7 @@ End Function
 
 ## 🎨 HTML/CSS/JavaScript Structure
 
-### **calendarv27.html Overview**
+### **calendar.html Overview**
 
 **Main Sections:**
 
@@ -701,7 +701,7 @@ function setPrimaryCalendar(id) {
 | Layer | Responsibility |
 | ------- | ----------------- |
 | **Models** | TblAppointments, TblCalendars (DB tables) |
-| **Views** | calendarv27.html (HTML/CSS rendering) |
+| **Views** | calendar.html (HTML/CSS rendering) |
 | **Controllers** | VBA classes dispatch commands → repos |
 | **Bridge** | clsJSBridge handles VBA ↔ JS communication |
 
@@ -812,7 +812,7 @@ All tables use soft-delete (`IsDeleted = True`) rather than hard deletion.
 
 ### **Add a New Command**
 
-1. **Add JS handler** in calendarv27.html (e.g., `saveSettings(data)` → `queueCommand({action: 'saveSettings', ...})`)
+1. **Add JS handler** in calendar.html (e.g., `saveSettings(data)` → `queueCommand({action: 'saveSettings', ...})`)
 2. **Add VBA case** in `clsCommandProcessor.ProcessCommand()`
 3. **Add repo method** (e.g., `clsSettingsRepo.Save(jsonStr)`)
 4. **Return reload code** ("NORELOAD" or CalendarID)
@@ -831,7 +831,7 @@ All tables use soft-delete (`IsDeleted = True`) rather than hard deletion.
 
 | Component | Role |
 | ----------- | ------ |
-| **calendarv27.html** | UI, event listeners, rendering, command queueing |
+| **calendar.html** | UI, event listeners, rendering, command queueing |
 | **CSS** | Theme system, layouts, responsive design |
 | **JavaScript** | Application state, user interactions, validation |
 | **clsJSONHelper** | JSON escaping, lightweight parsing |
