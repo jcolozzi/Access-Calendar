@@ -20,9 +20,13 @@ It brings a polished scheduling interface to Access while keeping your data and 
 
 ## Screenshots
 
+### Month view 
 ![Calendar month view](https://github.com/jcolozzi/Access-Calendar/blob/main/images/month-view.png)
+### Week view 
 ![Calendar week view](https://github.com/jcolozzi/Access-Calendar/blob/main/images/week-view.png)
+### Day view 
 ![Calendar day view](https://github.com/jcolozzi/Access-Calendar/blob/main/images/day-view.png)
+### Settings
 ![Calendar settings](https://github.com/jcolozzi/Access-Calendar/blob/main/images/settings-view.png)
 
 ## Quick Start
