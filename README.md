@@ -121,13 +121,6 @@ The form shell in `cls/vba_form_code_behind.txt` currently declares:
 Private Const CALENDAR_NAME As String = "calendar.html"
 ```
 
-This repository currently contains `calendar.html`. Use one of these approaches:
-
-- change `CALENDAR_NAME` to `"calendar.html"`, or
-- rename/copy the HTML file to `calendarv27.html`.
-
-Without this alignment, `DocumentComplete` checks and initial navigation can miss the expected page name.
-
 ## Standalone UI Mode
 
 When `calendar.html` is opened outside Access, it runs in standalone mode:
