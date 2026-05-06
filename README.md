@@ -39,4 +39,4 @@ It brings a polished scheduling interface to Access while keeping your data and 
 
 ## Documentation
 
-- Technical/developer README: [README.md](README.md)
+- Technical/developer README: [README.dev.md](README.dev.md)
