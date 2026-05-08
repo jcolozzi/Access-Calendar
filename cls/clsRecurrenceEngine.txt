@@ -1,0 +1,337 @@
+' =============================================================================
+' clsRecurrenceEngine
+' Expands recurring appointment master records into virtual occurrences.
+'
+' Depends on: clsJSONHelper (for Escape + BuildOccJSON)
+'             clsDateHelper (for GetNthWeekdayOfMonth)
+'
+' Usage:
+'   Dim re As New clsRecurrenceEngine
+'   re.Init New clsJSONHelper, New clsDateHelper
+'   Dim json As String
+'   json = re.BuildOccurrences(rsAppt, winStart, winEnd)
+' =============================================================================
+Option Compare Database
+Option Explicit
+
+Private m_JSON As clsJSONHelper
+Private m_Date As clsDateHelper
+
+' -----------------------------------------------------------------------------
+' Init  -  inject utility dependencies (call once after New)
+' -----------------------------------------------------------------------------
+Public Sub Init(jh As clsJSONHelper, dh As clsDateHelper)
+    Set m_JSON = jh
+    Set m_Date = dh
+End Sub
+
+' =============================================================================
+' BuildOccurrences  -  returns comma-separated JSON event objects for all
+' occurrences of rsA within [winStart, winEnd].
+' (Replaces the old form-level BuildRecurOccurrences function)
+' =============================================================================
+Public Function BuildOccurrences(ByVal rsA As DAO.Recordset, _
+                                  ByVal winStart As Date, _
+                                  ByVal winEnd As Date) As String
+    ' --- Parse shared recurrence fields ---
+    Dim rType As String, rInt As Integer, rDOW As String
+    Dim rMMode As String, rMDay As Integer, rMWeek As Integer, rMDOW As Integer
+    Dim rEType As String, rECnt As Integer, rExcep As String
+    Dim masterDate As Date, cap As Date
+
+    If Not ParseRecurFields(rsA, winEnd, rType, rInt, rDOW, rMMode, rMDay, _
+                            rMWeek, rMDOW, rEType, rECnt, rExcep, masterDate, cap) Then
+        BuildOccurrences = "": Exit Function
+    End If
+
+    ' --- Shared display fields ---
+    Dim mID   As Long:    mID = rsA!AppointmentID
+    Dim sStr  As String:  sStr = IIf(IsNull(rsA!StartTime), "09:00", Format(rsA!StartTime, "hh:nn"))
+    Dim eStr  As String:  eStr = IIf(IsNull(rsA!EndTime), "10:00", Format(rsA!EndTime, "hh:nn"))
+    Dim clStr As String:  clStr = IIf(IsNull(rsA!color) Or Nz(rsA!color, "") = "", "#4f46e5", CStr(rsA!color))
+    Dim tEsc  As String:  tEsc = m_JSON.Escape(Nz(rsA!Title, ""))
+    Dim nEsc  As String:  nEsc = m_JSON.Escape(Nz(rsA!Notes, ""))
+    Dim calId As String:  calId = Nz(rsA!CalendarID, "")
+    Dim aDStr As String:  aDStr = IIf(Nz(rsA!allDay, False), "true", "false")
+    Dim rMinsV As Integer: rMinsV = CInt(Nz(rsA!ReminderMinutes, -1))
+    Dim rEDStr As String: rEDStr = IIf(rEType = "date" And Not IsNull(rsA!RecurEndDate), _
+                                        Format(rsA!RecurEndDate, "yyyy-mm-dd"), "")
+    Dim rSStr As String:  rSStr = Format(masterDate, "yyyy-mm-dd")
+
+    Dim result As String: result = ""
+    Dim occ    As Integer: occ = 0
+
+    Select Case rType
+
+      Case "daily"
+        Dim dC As Date: dC = masterDate
+        Dim dSafety As Integer: dSafety = 0
+        Do While dC <= cap And (rEType <> "count" Or occ < rECnt) And dSafety < 3000
+            dSafety = dSafety + 1
+            If dC >= winStart Then
+                Dim ds1 As String: ds1 = Format(dC, "yyyy-mm-dd")
+                If InStr(rExcep, """" & ds1 & """") = 0 Then
+                    If result <> "" Then result = result & ","
+                    result = result & m_JSON.BuildOccJSON(mID, ds1, calId, tEsc, sStr, eStr, _
+                        aDStr, clStr, nEsc, rType, rInt, rDOW, rMMode, rMDay, rMWeek, _
+                        rMDOW, rEType, rEDStr, rECnt, rSStr, rMinsV)
+                    occ = occ + 1
+                End If
+            End If
+            dC = dC + rInt
+        Loop
+
+      Case "weekly"
+        Dim wkB As Date: wkB = masterDate - (Weekday(masterDate, vbSunday) - 1)
+        Dim dA() As Integer
+        Dim dCnt As Integer
+        If rDOW = "" Then
+            ReDim dA(0): dA(0) = Weekday(masterDate, vbSunday) - 1: dCnt = 1
+        Else
+            Dim dp() As String: dp = Split(rDOW, ","): dCnt = UBound(dp) + 1
+            ReDim dA(dCnt - 1)
+            Dim pi As Integer
+            For pi = 0 To UBound(dp): dA(pi) = CInt(Trim(dp(pi))): Next pi
+        End If
+        Dim wS As Integer: wS = 0
+        Do While wkB <= cap And (rEType <> "count" Or occ < rECnt) And wS < 2000
+            wS = wS + 1
+            Dim wi As Integer
+            For wi = 0 To dCnt - 1
+                Dim wD As Date: wD = wkB + dA(wi)
+                If wD >= masterDate And wD >= winStart And wD <= cap Then
+                    If rEType <> "count" Or occ < rECnt Then
+                        Dim ds2 As String: ds2 = Format(wD, "yyyy-mm-dd")
+                        If InStr(rExcep, """" & ds2 & """") = 0 Then
+                            If result <> "" Then result = result & ","
+                            result = result & m_JSON.BuildOccJSON(mID, ds2, calId, tEsc, sStr, eStr, _
+                                aDStr, clStr, nEsc, rType, rInt, rDOW, rMMode, rMDay, rMWeek, _
+                                rMDOW, rEType, rEDStr, rECnt, rSStr, rMinsV)
+                            occ = occ + 1
+                        End If
+                    End If
+                End If
+            Next wi
+            wkB = wkB + (7 * rInt)
+        Loop
+
+      Case "monthly"
+        Dim mMn As Integer: mMn = Month(masterDate)
+        Dim mYr As Integer: mYr = Year(masterDate)
+        Dim mSf As Integer: mSf = 0
+        Do While DateSerial(mYr, mMn, 1) <= cap And (rEType <> "count" Or occ < rECnt) And mSf < 200
+            mSf = mSf + 1
+            Dim mDt As Date
+            If rMMode = "day" Then
+                Dim tD As Integer: tD = rMDay
+                Dim dIvM As Integer: dIvM = Day(DateSerial(mYr, mMn + 1, 0))
+                If tD > dIvM Then tD = dIvM
+                mDt = DateSerial(mYr, mMn, tD)
+            Else
+                mDt = m_Date.GetNthWeekdayOfMonth(mYr, mMn, rMWeek, rMDOW)
+            End If
+            If mDt >= masterDate And mDt >= winStart And mDt <= cap Then
+                If rEType <> "count" Or occ < rECnt Then
+                    Dim ds3 As String: ds3 = Format(mDt, "yyyy-mm-dd")
+                    If InStr(rExcep, """" & ds3 & """") = 0 Then
+                        If result <> "" Then result = result & ","
+                        result = result & m_JSON.BuildOccJSON(mID, ds3, calId, tEsc, sStr, eStr, _
+                            aDStr, clStr, nEsc, rType, rInt, rDOW, rMMode, rMDay, rMWeek, _
+                            rMDOW, rEType, rEDStr, rECnt, rSStr, rMinsV)
+                        occ = occ + 1
+                    End If
+                End If
+            End If
+            mMn = mMn + rInt
+            Do While mMn > 12: mMn = mMn - 12: mYr = mYr + 1: Loop
+        Loop
+
+      Case "yearly"
+        Dim yC As Date: yC = DateSerial(Year(masterDate), Month(masterDate), Day(masterDate))
+        Dim ySafety As Integer: ySafety = 0
+        Do While yC <= cap And (rEType <> "count" Or occ < rECnt) And ySafety < 100
+            ySafety = ySafety + 1
+            If yC >= masterDate And yC >= winStart And yC <= cap Then
+                Dim ds4 As String: ds4 = Format(yC, "yyyy-mm-dd")
+                If InStr(rExcep, """" & ds4 & """") = 0 Then
+                    If result <> "" Then result = result & ","
+                    result = result & m_JSON.BuildOccJSON(mID, ds4, calId, tEsc, sStr, eStr, _
+                        aDStr, clStr, nEsc, rType, rInt, rDOW, rMMode, rMDay, rMWeek, _
+                        rMDOW, rEType, rEDStr, rECnt, rSStr, rMinsV)
+                    occ = occ + 1
+                End If
+            End If
+            yC = DateSerial(Year(yC) + rInt, Month(masterDate), Day(masterDate))
+        Loop
+
+    End Select
+
+    BuildOccurrences = result
+End Function
+
+' =============================================================================
+' GetDatesInWindow  -  populates a Collection with Date values for a recurring
+' master record that fall within [winStart, winEnd].
+' Used by the reminder system to find upcoming occurrences.
+' (Replaces the old form-level GetRecurDatesInWindow sub)
+' =============================================================================
+Public Sub GetDatesInWindow(ByVal rsA As DAO.Recordset, _
+                             ByVal winStart As Date, _
+                             ByVal winEnd As Date, _
+                             ByRef result As Collection)
+    ' --- Parse shared recurrence fields ---
+    Dim rType As String, rInt As Integer, rDOW As String
+    Dim rMMode As String, rMDay As Integer, rMWeek As Integer, rMDOW As Integer
+    Dim rEType As String, rECnt As Integer, rExcep As String
+    Dim masterDate As Date, cap As Date
+
+    If Not ParseRecurFields(rsA, winEnd, rType, rInt, rDOW, rMMode, rMDay, _
+                            rMWeek, rMDOW, rEType, rECnt, rExcep, masterDate, cap) Then
+        Exit Sub
+    End If
+
+    Dim occ As Integer: occ = 0
+    Dim dS  As String
+
+    Select Case rType
+
+        Case "daily"
+            Dim dC As Date: dC = masterDate
+            Dim dailySafety As Integer: dailySafety = 0
+            Do While dC <= cap And (rEType <> "count" Or occ < rECnt) And dailySafety < 3000
+                dailySafety = dailySafety + 1
+                If dC >= winStart Then
+                    dS = Format(dC, "yyyy-mm-dd")
+                    If InStr(rExcep, """" & dS & """") = 0 Then
+                        result.Add dC: occ = occ + 1
+                    End If
+                End If
+                dC = dC + rInt
+            Loop
+
+        Case "weekly"
+            Dim wkB As Date: wkB = masterDate - (Weekday(masterDate, vbSunday) - 1)
+            Dim dA()  As Integer
+            Dim dCnt  As Integer
+            If rDOW = "" Then
+                ReDim dA(0): dA(0) = Weekday(masterDate, vbSunday) - 1: dCnt = 1
+            Else
+                Dim dp() As String: dp = Split(rDOW, ","): dCnt = UBound(dp) + 1
+                ReDim dA(dCnt - 1)
+                Dim pi As Integer
+                For pi = 0 To UBound(dp): dA(pi) = CInt(Trim(dp(pi))): Next pi
+            End If
+            Dim wSt As Integer: wSt = 0
+            Do While wkB <= cap And (rEType <> "count" Or occ < rECnt) And wSt < 2000
+                wSt = wSt + 1
+                Dim wi As Integer
+                For wi = 0 To dCnt - 1
+                    Dim wD As Date: wD = wkB + dA(wi)
+                    If wD >= masterDate And wD >= winStart And wD <= cap Then
+                        If rEType <> "count" Or occ < rECnt Then
+                            dS = Format(wD, "yyyy-mm-dd")
+                            If InStr(rExcep, """" & dS & """") = 0 Then
+                                result.Add wD: occ = occ + 1
+                            End If
+                        End If
+                    End If
+                Next wi
+                wkB = wkB + (7 * rInt)
+            Loop
+
+        Case "monthly"
+            Dim mMn As Integer: mMn = Month(masterDate)
+            Dim mYr As Integer: mYr = Year(masterDate)
+            Dim mSf As Integer: mSf = 0
+            Do While DateSerial(mYr, mMn, 1) <= cap And (rEType <> "count" Or occ < rECnt) And mSf < 200
+                mSf = mSf + 1
+                Dim mDt As Date
+                If rMMode = "day" Then
+                    Dim tD   As Integer: tD = rMDay
+                    Dim dIvM As Integer: dIvM = Day(DateSerial(mYr, mMn + 1, 0))
+                    If tD > dIvM Then tD = dIvM
+                    mDt = DateSerial(mYr, mMn, tD)
+                Else
+                    mDt = m_Date.GetNthWeekdayOfMonth(mYr, mMn, rMWeek, rMDOW)
+                End If
+                If mDt >= masterDate And mDt >= winStart And mDt <= cap Then
+                    If rEType <> "count" Or occ < rECnt Then
+                        dS = Format(mDt, "yyyy-mm-dd")
+                        If InStr(rExcep, """" & dS & """") = 0 Then
+                            result.Add mDt: occ = occ + 1
+                        End If
+                    End If
+                End If
+                mMn = mMn + rInt
+                Do While mMn > 12: mMn = mMn - 12: mYr = mYr + 1: Loop
+            Loop
+
+        Case "yearly"
+            Dim yC As Date: yC = DateSerial(Year(masterDate), Month(masterDate), Day(masterDate))
+            Dim ySafety As Integer: ySafety = 0
+            Do While yC <= cap And (rEType <> "count" Or occ < rECnt) And ySafety < 100
+                ySafety = ySafety + 1
+                If yC >= masterDate And yC >= winStart And yC <= cap Then
+                    dS = Format(yC, "yyyy-mm-dd")
+                    If InStr(rExcep, """" & dS & """") = 0 Then
+                        result.Add yC: occ = occ + 1
+                    End If
+                End If
+                yC = DateSerial(Year(yC) + rInt, Month(masterDate), Day(masterDate))
+            Loop
+
+    End Select
+End Sub
+
+' =============================================================================
+' PRIVATE HELPERS
+' =============================================================================
+
+' -----------------------------------------------------------------------------
+' ParseRecurFields  -  reads recurrence columns from a DAO recordset row
+' into local variables.  Returns False when the row is not recurring or has
+' no StartApptDate (callers should exit early in that case).
+' Eliminates the duplicate field-parsing block that was in both
+' BuildRecurOccurrences and GetRecurDatesInWindow.
+' -----------------------------------------------------------------------------
+Private Function ParseRecurFields(ByVal rsA As DAO.Recordset, _
+                                   ByVal winEnd As Date, _
+                                   ByRef rType As String, _
+                                   ByRef rInt As Integer, _
+                                   ByRef rDOW As String, _
+                                   ByRef rMMode As String, _
+                                   ByRef rMDay As Integer, _
+                                   ByRef rMWeek As Integer, _
+                                   ByRef rMDOW As Integer, _
+                                   ByRef rEType As String, _
+                                   ByRef rECnt As Integer, _
+                                   ByRef rExcep As String, _
+                                   ByRef masterDate As Date, _
+                                   ByRef cap As Date) As Boolean
+    ParseRecurFields = False
+
+    rType = Nz(rsA!RecurType, "none")
+    If rType = "none" Or rType = "" Then Exit Function
+
+    If IsNull(rsA!StartApptDate) Then Exit Function
+    masterDate = rsA!StartApptDate
+
+    rInt   = IIf(IsNull(rsA!RecurInterval) Or Nz(rsA!RecurInterval, 0) < 1, 1, CInt(rsA!RecurInterval))
+    rDOW   = Nz(rsA!RecurDaysOfWeek, "")
+    rMMode = Nz(rsA!RecurMonthlyMode, "day")
+    rMDay  = IIf(IsNull(rsA!RecurMonthDay), 1, CInt(rsA!RecurMonthDay))
+    rMWeek = IIf(IsNull(rsA!RecurMonthWeek), 1, CInt(rsA!RecurMonthWeek))
+    rMDOW  = IIf(IsNull(rsA!RecurMonthDOW), 0, CInt(rsA!RecurMonthDOW))
+    rEType = Nz(rsA!RecurEndType, "never")
+    rECnt  = IIf(IsNull(rsA!RecurCount) Or Nz(rsA!RecurCount, 0) < 1, 999, CInt(rsA!RecurCount))
+    rExcep = Nz(rsA!RecurExceptions, "")
+
+    If rEType = "date" And Not IsNull(rsA!RecurEndDate) Then
+        cap = rsA!RecurEndDate
+        If cap > winEnd Then cap = winEnd
+    Else
+        cap = winEnd
+    End If
+
+    ParseRecurFields = True
+End Function

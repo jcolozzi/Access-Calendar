@@ -1,0 +1,340 @@
+' =============================================================================
+' clsAppointmentRepo
+' Data-access class for tblAppointments.  Each public method corresponds to
+' one action that was previously inlined in ProcessCalendarCommand.
+'
+' Depends on: clsJSONHelper  (for ExtractValue)
+'             clsDateHelper  (for ISOToDate, HMToTime)
+'
+' Usage:
+'   Dim ar As New clsAppointmentRepo
+'   ar.Init New clsJSONHelper, New clsDateHelper
+'   ar.Save jsonStr
+' =============================================================================
+Option Compare Database
+Option Explicit
+
+Private m_JSON As clsJSONHelper
+Private m_Date As clsDateHelper
+
+' -----------------------------------------------------------------------------
+' Init  -  inject utility dependencies (call once after New)
+' -----------------------------------------------------------------------------
+Public Sub Init(jh As clsJSONHelper, dh As clsDateHelper)
+    Set m_JSON = jh
+    Set m_Date = dh
+End Sub
+
+' =============================================================================
+' Save  -  insert or update an appointment (including all recurrence fields)
+' Returns: the CalendarID of the saved record's calendar (for active-cal sync)
+' =============================================================================
+Public Function Save(ByVal jsonStr As String) As String
+    Dim db As DAO.Database: Set db = CurrentDb
+    Dim rs As DAO.Recordset
+
+    Dim idText  As String:  idText = m_JSON.ExtractValue(jsonStr, "id")
+    Dim calId   As String:  calId = m_JSON.ExtractValue(jsonStr, "calendarId")
+    Dim Title   As String:  Title = m_JSON.ExtractValue(jsonStr, "title")
+    Dim dIso    As String:  dIso = m_JSON.ExtractValue(jsonStr, "date")
+    Dim dEndIso As String:  dEndIso = Nz(m_JSON.ExtractValue(jsonStr, "endDate"), "")
+    Dim tStart  As String:  tStart = m_JSON.ExtractValue(jsonStr, "start")
+    Dim tEnd    As String:  tEnd = m_JSON.ExtractValue(jsonStr, "end")
+    Dim color   As String:  color = m_JSON.ExtractValue(jsonStr, "color")
+    Dim Notes   As String:  Notes = m_JSON.ExtractValue(jsonStr, "notes")
+    Dim bAllDay As Boolean: bAllDay = (m_JSON.ExtractValue(jsonStr, "allDay") = "true")
+
+    ' Recurrence fields
+    Dim rType As String:     rType = Nz(m_JSON.ExtractValue(jsonStr, "recurType"), "none")
+    Dim rInterval As String: rInterval = Nz(m_JSON.ExtractValue(jsonStr, "recurInterval"), "1")
+    Dim rDOW As String:      rDOW = Nz(m_JSON.ExtractValue(jsonStr, "recurDaysOfWeek"), "")
+    Dim rMonMode As String:  rMonMode = Nz(m_JSON.ExtractValue(jsonStr, "recurMonthlyMode"), "day")
+    Dim rMonDay As String:   rMonDay = Nz(m_JSON.ExtractValue(jsonStr, "recurMonthDay"), "1")
+    Dim rMonWeek As String:  rMonWeek = Nz(m_JSON.ExtractValue(jsonStr, "recurMonthWeek"), "1")
+    Dim rMonDOW As String:   rMonDOW = Nz(m_JSON.ExtractValue(jsonStr, "recurMonthDOW"), "0")
+    Dim rEndType As String:  rEndType = Nz(m_JSON.ExtractValue(jsonStr, "recurEndType"), "never")
+    Dim rEndDate As String:  rEndDate = Nz(m_JSON.ExtractValue(jsonStr, "recurEndDate"), "")
+    Dim rCount As String:    rCount = Nz(m_JSON.ExtractValue(jsonStr, "recurCount"), "0")
+    Dim rRangeStart As String: rRangeStart = Nz(m_JSON.ExtractValue(jsonStr, "recurRangeStart"), dIso)
+    If rRangeStart = "" Then rRangeStart = dIso
+
+    ' Numeric ID — for recurring virtual events, id may come in as a master numeric id
+    Dim numId As Long
+    Dim rawId As String: rawId = Trim(idText)
+    If IsNumeric(rawId) Then numId = CLng(rawId) Else numId = 0
+
+    If numId = 0 Then
+        Set rs = db.OpenRecordset("tblAppointments", dbOpenDynaset)
+        rs.AddNew
+        rs!CalendarID = calId
+        rs!ReminderFired = False
+        rs!CreatedOn = Now()
+    Else
+        Set rs = db.OpenRecordset( _
+            "SELECT * FROM tblAppointments WHERE AppointmentID = " & numId, dbOpenDynaset)
+        If rs.EOF Then
+            rs.Close: Set rs = Nothing: Set db = Nothing
+            Save = "": Exit Function
+        End If
+        rs.Edit
+        ' Allow changing the calendar on existing appointments
+        If calId <> "" Then rs!CalendarID = calId
+    End If
+
+    rs!Title = Nz(Title, "")
+    rs!StartApptDate = m_Date.ISOToDate(rRangeStart)
+    rs!StartTime = m_Date.HMToTime(tStart)
+    rs!EndTime = m_Date.HMToTime(tEnd)
+    rs!allDay = bAllDay
+    If dEndIso <> "" And dEndIso <> dIso Then
+        rs!EndApptDate = m_Date.ISOToDate(dEndIso)
+    Else
+        rs!EndApptDate = Null
+    End If
+    rs!color = IIf(Nz(color, "") = "", "#4f46e5", color)
+    rs!Notes = Nz(Notes, "")
+
+    ' Reminder — use If/Then to avoid IIf evaluating both branches (VBA bug)
+    Dim rMinsStr As String: rMinsStr = Nz(m_JSON.ExtractValue(jsonStr, "reminderMinutes"), "-1")
+    If IsNumeric(rMinsStr) And CLng(rMinsStr) >= 0 Then
+        rs!ReminderMinutes = CInt(rMinsStr)
+        ' Reset ReminderFired only when the reminder value actually changes
+        If numId = 0 Then rs!ReminderFired = False
+    Else
+        rs!ReminderMinutes = Null
+    End If
+    rs!ModifiedOn = Now()
+    rs!IsDeleted = False
+
+    ' Recurrence — use If/Then to avoid IIf evaluating non-numeric branch
+    rs!RecurType = rType
+    If IsNumeric(rInterval) Then rs!RecurInterval = CInt(rInterval) Else rs!RecurInterval = 1
+    rs!RecurDaysOfWeek = rDOW
+    rs!RecurMonthlyMode = rMonMode
+    If IsNumeric(rMonDay) Then rs!RecurMonthDay = CInt(rMonDay) Else rs!RecurMonthDay = 1
+    If IsNumeric(rMonWeek) Then rs!RecurMonthWeek = CInt(rMonWeek) Else rs!RecurMonthWeek = 1
+    If IsNumeric(rMonDOW) Then rs!RecurMonthDOW = CInt(rMonDOW) Else rs!RecurMonthDOW = 0
+    rs!RecurEndType = rEndType
+    If rEndType = "date" And rEndDate <> "" Then
+        rs!RecurEndDate = m_Date.ISOToDate(rEndDate)
+    Else
+        rs!RecurEndDate = Null
+    End If
+    If IsNumeric(rCount) Then rs!RecurCount = CInt(rCount) Else rs!RecurCount = 0
+
+    ' Preserve existing RecurExceptions when editing
+    If numId > 0 Then
+        If rType = "none" Then rs!RecurExceptions = Null
+    Else
+        rs!RecurExceptions = Null
+    End If
+
+    rs.Update
+    rs.Close
+    Set rs = Nothing: Set db = Nothing
+    Save = calId
+End Function
+
+' =============================================================================
+' Move  -  drag-drop an appointment to a new date/time
+' =============================================================================
+Public Sub Move(ByVal jsonStr As String)
+    Dim db As DAO.Database: Set db = CurrentDb
+
+    Dim mvId      As String: mvId = m_JSON.ExtractValue(jsonStr, "id")
+    Dim mvDiso    As String: mvDiso = m_JSON.ExtractValue(jsonStr, "date")
+    Dim mvStart   As String: mvStart = m_JSON.ExtractValue(jsonStr, "start")
+    Dim mvEnd     As String: mvEnd = m_JSON.ExtractValue(jsonStr, "end")
+    Dim mvEndDate As String: mvEndDate = Nz(m_JSON.ExtractValue(jsonStr, "endDate"), "")
+
+    Dim rs As DAO.Recordset
+    Set rs = db.OpenRecordset( _
+        "SELECT * FROM tblAppointments WHERE AppointmentID = " & CLng(mvId), dbOpenDynaset)
+
+    If Not rs.EOF Then
+        Dim mvNewEnd As Variant
+        If mvEndDate <> "" Then
+            mvNewEnd = m_Date.ISOToDate(mvEndDate)
+        ElseIf Not IsNull(rs!EndApptDate) Then
+            Dim durDays As Long
+            durDays = DateDiff("d", rs!StartApptDate, rs!EndApptDate)
+            mvNewEnd = m_Date.ISOToDate(mvDiso) + durDays
+        Else
+            mvNewEnd = Null
+        End If
+        rs.Edit
+        rs!StartApptDate = m_Date.ISOToDate(mvDiso)
+        rs!StartTime = m_Date.HMToTime(mvStart)
+        rs!EndTime = m_Date.HMToTime(mvEnd)
+        rs!EndApptDate = mvNewEnd
+        rs!ModifiedOn = Now()
+        rs.Update
+    End If
+
+    rs.Close: Set rs = Nothing: Set db = Nothing
+End Sub
+
+' =============================================================================
+' Resize  -  update start/end time (works for both regular and recurring master)
+' =============================================================================
+Public Sub Resize(ByVal jsonStr As String)
+    Dim db As DAO.Database: Set db = CurrentDb
+
+    Dim rzId       As String: rzId = m_JSON.ExtractValue(jsonStr, "id")
+    Dim rzMasterId As String: rzMasterId = Nz(m_JSON.ExtractValue(jsonStr, "masterId"), "")
+    Dim rzStart    As String: rzStart = m_JSON.ExtractValue(jsonStr, "start")
+    Dim rzEnd      As String: rzEnd = m_JSON.ExtractValue(jsonStr, "end")
+
+    ' For recurring virtual events the id is like "r123_2026-03-09";
+    ' use masterId (the real PK) when available, else fall back to id.
+    Dim rzNumId As Long
+    If rzMasterId <> "" And IsNumeric(rzMasterId) Then
+        rzNumId = CLng(rzMasterId)
+    ElseIf IsNumeric(rzId) Then
+        rzNumId = CLng(rzId)
+    Else
+        Set db = Nothing: Exit Sub
+    End If
+
+    Dim rs As DAO.Recordset
+    Set rs = db.OpenRecordset( _
+        "SELECT * FROM tblAppointments WHERE AppointmentID = " & rzNumId, dbOpenDynaset)
+    If Not rs.EOF Then
+        rs.Edit
+        rs!StartTime = m_Date.HMToTime(rzStart)
+        rs!EndTime = m_Date.HMToTime(rzEnd)
+        rs!ModifiedOn = Now()
+        rs.Update
+    End If
+
+    rs.Close: Set rs = Nothing: Set db = Nothing
+End Sub
+
+' =============================================================================
+' RescheduleOccurrence  -  move one occurrence of a recurring series
+'   Step 1: add original date to master's RecurExceptions
+'   Step 2: create a standalone appointment at the new date/time
+' =============================================================================
+Public Sub RescheduleOccurrence(ByVal jsonStr As String)
+    Dim db As DAO.Database: Set db = CurrentDb
+
+    Dim roMasterId As Long:  roMasterId = CLng(m_JSON.ExtractValue(jsonStr, "masterId"))
+    Dim roOrigDate As String: roOrigDate = m_JSON.ExtractValue(jsonStr, "originalDate")
+    Dim roNewDate  As String: roNewDate = m_JSON.ExtractValue(jsonStr, "newDate")
+    Dim roStart    As String: roStart = m_JSON.ExtractValue(jsonStr, "start")
+    Dim roEnd      As String: roEnd = m_JSON.ExtractValue(jsonStr, "end")
+    Dim roTitle    As String: roTitle = m_JSON.ExtractValue(jsonStr, "title")
+    Dim roCalId    As String: roCalId = m_JSON.ExtractValue(jsonStr, "calendarId")
+    Dim roColor    As String: roColor = Nz(m_JSON.ExtractValue(jsonStr, "color"), "#4f46e5")
+    Dim roNotes    As String: roNotes = Nz(m_JSON.ExtractValue(jsonStr, "notes"), "")
+    Dim roBAllDay  As Boolean: roBAllDay = (m_JSON.ExtractValue(jsonStr, "allDay") = "true")
+    Dim roReminderMins As Integer: roReminderMins = CInt(Nz(m_JSON.ExtractValue(jsonStr, "reminderMinutes"), -1))
+
+    ' -- Step 1: add original date to master's RecurExceptions ----------------
+    Dim rsMaster As DAO.Recordset
+    Set rsMaster = db.OpenRecordset( _
+        "SELECT * FROM tblAppointments WHERE AppointmentID = " & roMasterId, dbOpenDynaset)
+    If Not rsMaster.EOF Then
+        rsMaster.Edit
+        Dim roExcJson As String
+        roExcJson = Nz(rsMaster!RecurExceptions, "[]")
+        If Left$(roExcJson, 1) <> "[" Then roExcJson = "[]"
+        Dim roEntry As String: roEntry = """" & roOrigDate & """"
+        If roExcJson = "[]" Then
+            roExcJson = "[" & roEntry & "]"
+        ElseIf InStr(roExcJson, roEntry) = 0 Then
+            roExcJson = Left$(roExcJson, Len(roExcJson) - 1) & "," & roEntry & "]"
+        End If
+        rsMaster!RecurExceptions = roExcJson
+        rsMaster!ModifiedOn = Now()
+        rsMaster.Update
+    End If
+    rsMaster.Close: Set rsMaster = Nothing
+
+    ' -- Step 2: create standalone appointment for the rescheduled date -------
+    Dim rsNew As DAO.Recordset
+    Set rsNew = db.OpenRecordset("tblAppointments", dbOpenDynaset)
+    rsNew.AddNew
+    rsNew!CalendarID = roCalId
+    rsNew!Title = roTitle
+    rsNew!StartApptDate = m_Date.ISOToDate(roNewDate)
+    rsNew!StartTime = m_Date.HMToTime(roStart)
+    rsNew!EndTime = m_Date.HMToTime(roEnd)
+    rsNew!allDay = roBAllDay
+    rsNew!color = roColor
+    rsNew!Notes = roNotes
+    rsNew!ModifiedOn = Now()
+    rsNew!IsDeleted = False
+    rsNew!RecurType = "none"
+    rsNew!RecurInterval = 1
+    rsNew!RecurDaysOfWeek = ""
+    rsNew!RecurMonthlyMode = "day"
+    rsNew!RecurMonthDay = 1
+    rsNew!RecurMonthWeek = 1
+    rsNew!RecurMonthDOW = 0
+    rsNew!RecurEndType = "never"
+    rsNew!RecurEndDate = Null
+    rsNew!RecurCount = 0
+    rsNew!RecurExceptions = Null
+    rsNew!EndApptDate = Null
+    If roReminderMins >= 0 Then
+        rsNew!ReminderMinutes = roReminderMins
+    Else
+        rsNew!ReminderMinutes = Null
+    End If
+    rsNew!ReminderFired = False
+    rsNew.Update
+    rsNew.Close: Set rsNew = Nothing
+    Set db = Nothing
+End Sub
+
+' =============================================================================
+' Delete  -  soft-delete a single (non-recurring) appointment
+' =============================================================================
+Public Sub Delete(ByVal jsonStr As String)
+    Dim dlId As String: dlId = m_JSON.ExtractValue(jsonStr, "id")
+    CurrentDb.Execute _
+        "UPDATE tblAppointments SET IsDeleted = True, ModifiedOn = Now() " & _
+        "WHERE AppointmentID = " & CLng(dlId), dbFailOnError
+End Sub
+
+' =============================================================================
+' DeleteOccurrence  -  add one date to the master's RecurExceptions array
+' =============================================================================
+Public Sub DeleteOccurrence(ByVal jsonStr As String)
+    Dim doId   As Long:   doId = CLng(m_JSON.ExtractValue(jsonStr, "id"))
+    Dim doDate As String: doDate = m_JSON.ExtractValue(jsonStr, "date")
+    If doId = 0 Or doDate = "" Then Exit Sub
+
+    Dim db As DAO.Database: Set db = CurrentDb
+    Dim rs As DAO.Recordset
+    Set rs = db.OpenRecordset( _
+        "SELECT * FROM tblAppointments WHERE AppointmentID = " & doId, dbOpenDynaset)
+    If Not rs.EOF Then
+        rs.Edit
+        Dim excJson As String
+        excJson = Nz(rs!RecurExceptions, "[]")
+        If Left$(excJson, 1) <> "[" Then excJson = "[]"
+        Dim newEntry As String: newEntry = """" & doDate & """"
+        If excJson = "[]" Then
+            excJson = "[" & newEntry & "]"
+        ElseIf InStr(excJson, newEntry) = 0 Then
+            excJson = Left$(excJson, Len(excJson) - 1) & "," & newEntry & "]"
+        End If
+        rs!RecurExceptions = excJson
+        rs!ModifiedOn = Now()
+        rs.Update
+    End If
+    rs.Close: Set rs = Nothing: Set db = Nothing
+End Sub
+
+' =============================================================================
+' DeleteSeries  -  soft-delete an entire recurring master record
+' =============================================================================
+Public Sub DeleteSeries(ByVal jsonStr As String)
+    Dim dsId As Long: dsId = CLng(m_JSON.ExtractValue(jsonStr, "id"))
+    If dsId = 0 Then Exit Sub
+    CurrentDb.Execute _
+        "UPDATE tblAppointments SET IsDeleted = True, ModifiedOn = Now() " & _
+        "WHERE AppointmentID = " & dsId, dbFailOnError
+End Sub

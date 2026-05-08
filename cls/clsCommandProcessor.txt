@@ -1,0 +1,135 @@
+' =============================================================================
+' clsCommandProcessor
+' Dispatches JSON commands from the JS calendar to the appropriate repo/manager.
+' Replaces the giant Select Case in ProcessCalendarCommand.
+'
+' Depends on: clsJSONHelper        (for ExtractValue)
+'             clsAppointmentRepo   (for Save/Move/Resize/etc.)
+'             clsCalendarRepo      (for Add/Edit/Delete/SetActiveCalendar)
+'             clsCalendarGroupRepo (for Add/Rename/Delete/MoveCalendar)
+'             clsThemeManager      (for SetTheme)
+'
+' Usage:
+'   Dim cp As New clsCommandProcessor
+'   cp.Init jsonHelper, apptRepo, calRepo, themeManager
+'   Dim result As String
+'   result = cp.ProcessCommand(jsonStr)   ' returns calId or "NORELOAD"
+' =============================================================================
+Option Compare Database
+Option Explicit
+
+Private m_JSON   As clsJSONHelper
+Private m_Appts  As clsAppointmentRepo
+Private m_Cals   As clsCalendarRepo
+Private m_Groups As clsCalendarGroupRepo
+Private m_Theme  As clsThemeManager
+
+' -----------------------------------------------------------------------------
+' Init  -  inject all dependencies (call once after New)
+' -----------------------------------------------------------------------------
+Public Sub Init(jh As clsJSONHelper, _
+                ar As clsAppointmentRepo, _
+                cr As clsCalendarRepo, _
+                gr As clsCalendarGroupRepo, _
+                th As clsThemeManager)
+    Set m_JSON = jh
+    Set m_Appts = ar
+    Set m_Cals = cr
+    Set m_Groups = gr
+    Set m_Theme = th
+End Sub
+
+' =============================================================================
+' ProcessCommand  -  dispatch one JSON command string.
+' Returns the calendarId to restore after a data reload, or "NORELOAD"
+' when no reload is needed.
+' =============================================================================
+Public Function ProcessCommand(ByVal jsonStr As String) As String
+    Dim action As String
+    action = m_JSON.ExtractValue(jsonStr, "action")
+
+    Select Case action
+
+        ' -- Theme ------------------------------------------------------------
+        Case "setTheme"
+            m_Theme.SetTheme jsonStr
+            ProcessCommand = "NORELOAD"
+
+        ' -- Calendar management ----------------------------------------------
+        Case "setActiveCalendar"
+            m_Cals.SetActiveCalendar jsonStr
+            ProcessCommand = "NORELOAD"
+
+        Case "setOpenCalendars"
+            m_Cals.SetOpenCalendars jsonStr
+            ProcessCommand = "NORELOAD"
+
+        Case "addCalendar"
+            Dim newCalId As String
+            newCalId = m_Cals.Add(jsonStr)
+            ProcessCommand = newCalId
+
+        Case "editCalendar"
+            m_Cals.Edit jsonStr
+            ProcessCommand = m_Cals.ActiveCalendarID
+
+        Case "deleteCalendar"
+            Dim firstId As String
+            firstId = m_Cals.Delete(jsonStr)
+            If firstId = "" Then
+                ProcessCommand = "NORELOAD"
+            Else
+                ProcessCommand = firstId
+            End If
+
+        ' -- Group management -------------------------------------------------
+        Case "addGroup"
+            m_Groups.Add jsonStr
+            ProcessCommand = m_Cals.ActiveCalendarID
+
+        Case "renameGroup"
+            m_Groups.Rename jsonStr
+            ProcessCommand = m_Cals.ActiveCalendarID
+
+        Case "deleteGroup"
+            m_Groups.Delete jsonStr
+            ProcessCommand = m_Cals.ActiveCalendarID
+
+        Case "moveCalendarToGroup"
+            m_Groups.MoveCalendar jsonStr
+            ProcessCommand = m_Cals.ActiveCalendarID
+
+        ' -- Appointment CRUD -------------------------------------------------
+        Case "save"
+            m_Appts.Save jsonStr
+            ProcessCommand = m_Cals.ActiveCalendarID
+
+        Case "move"
+            m_Appts.Move jsonStr
+            ProcessCommand = m_Cals.ActiveCalendarID
+
+        Case "resize"
+            m_Appts.Resize jsonStr
+            ProcessCommand = m_Cals.ActiveCalendarID
+
+        Case "rescheduleOccurrence"
+            m_Appts.RescheduleOccurrence jsonStr
+            ProcessCommand = m_Cals.ActiveCalendarID
+
+        Case "delete"
+            m_Appts.Delete jsonStr
+            ProcessCommand = m_Cals.ActiveCalendarID
+
+        Case "deleteOccurrence"
+            m_Appts.DeleteOccurrence jsonStr
+            ProcessCommand = m_Cals.ActiveCalendarID
+
+        Case "deleteSeries"
+            m_Appts.DeleteSeries jsonStr
+            ProcessCommand = m_Cals.ActiveCalendarID
+
+        Case Else
+            ProcessCommand = "NORELOAD"
+
+    End Select
+End Function

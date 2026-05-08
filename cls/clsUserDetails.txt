@@ -1,0 +1,223 @@
+﻿Option Compare Database
+Option Explicit
+
+Private Const CONNECTION_STRING As String = "ADsDSOObject"
+Private Const CONNECTION_PROVIDER As String = "Active Directory Provider"
+Private Const ADODB_OBJECT_STATE As Integer = 1     'the adStateOpen constant's value
+
+
+Private Type TActiveWindowsSession
+    Username As String
+    UserDisplayName As String
+    UserFirstName As String
+    UserLastName As String
+    UserCommonName As String
+    UserEmailAddress As String
+    UserTelephoneNumber As String
+    UserDepartment As String
+    CompanySiteName As String
+    DomainName As String
+    MachineName As String
+    WindowsVerion As String
+    AppVersion As String
+End Type
+
+Private This As TActiveWindowsSession
+
+Private Sub Class_Initialize()
+    GetUserAttributes
+    GetSystemAttributes
+End Sub
+
+Private Sub Class_Terminate()
+    With This
+        .Username = Empty
+        .UserDisplayName = Empty
+        .UserFirstName = Empty
+        .UserLastName = Empty
+        .UserCommonName = Empty
+        .UserEmailAddress = Empty
+        .UserTelephoneNumber = Empty
+        .UserDepartment = Empty
+        .CompanySiteName = Empty
+        .DomainName = Empty
+        .MachineName = Empty
+        .WindowsVerion = Empty
+        .AppVersion = Empty
+    End With
+End Sub
+
+Public Property Get Username() As String
+    Username = This.Username
+End Property
+
+Public Property Get UserDisplayName() As String
+    UserDisplayName = This.UserDisplayName
+End Property
+
+Public Property Get UserFirstName() As String
+    UserFirstName = This.UserFirstName
+End Property
+
+Public Property Get UserLastName() As String
+    UserLastName = This.UserLastName
+End Property
+
+Public Property Get UserCommonName() As String
+    UserCommonName = This.UserCommonName
+End Property
+
+Public Property Get UserEmailAddress() As String
+    UserEmailAddress = This.UserEmailAddress
+End Property
+
+Public Property Get UserDepartment() As String
+    UserDepartment = This.UserDepartment
+End Property
+
+Public Property Get UserTelephoneNumber() As String
+    UserTelephoneNumber = This.UserTelephoneNumber
+End Property
+
+Public Property Get CompanySiteName() As String
+    CompanySiteName = This.CompanySiteName
+End Property
+
+Public Property Get DomainName() As String
+    DomainName = This.DomainName
+End Property
+
+Public Property Get MachineName() As String
+    MachineName = This.MachineName
+End Property
+
+Public Property Get WindowsVerion() As String
+    WindowsVerion = This.WindowsVerion
+End Property
+
+Public Property Get AppVersion() As String
+    AppVersion = This.AppVersion
+End Property
+
+Private Sub GetUserAttributes()
+
+    Dim Conn As Object, Cmnd As Object, Rcrdset As Object
+    Dim rootDSE As Object
+    Dim Base As String, Filter As String, _
+        UserAttributes As String
+    Dim Username As String
+    Const Scope As String = "subtree"
+
+        This.Username = NetworkUserName()
+
+        On Error GoTo CleanFail
+        Set rootDSE = GetObject("LDAP://RootDSE")
+
+            Base = "<LDAP://" & rootDSE.Get("defaultNamingContext") & ">"
+
+            'filter on user objects with the given account name
+            Filter = "(&(objectClass=user)(objectCategory=Person)"
+
+            Filter = Filter & "(sAMAccountName=" & This.Username & "))"
+
+            UserAttributes = "physicalDeliveryOfficeName,department,displayName," & _
+                             "givenName,sn,mail,telephoneNumber"
+
+            Set Conn = CreateObject("ADODB.Connection")
+                Conn.Provider = CONNECTION_STRING
+                Conn.Open CONNECTION_PROVIDER
+
+            Set Cmnd = CreateObject("ADODB.Command")
+
+            Set Cmnd.ActiveConnection = Conn
+
+                Cmnd.CommandText = Base & ";" & Filter & ";" _
+                                    & UserAttributes & ";" & Scope
+
+            Set Rcrdset = Cmnd.Execute
+
+            If Rcrdset.EOF Then GoTo CleanExit
+
+        'at times, some of these fields aren't supported so
+        'so I am usesing on error resume next to avoid any errors
+        'thrown by and empty field value
+        On Error Resume Next
+        With This
+            .CompanySiteName = Rcrdset.Fields("physicalDeliveryOfficeName").value
+            .UserDepartment = Rcrdset.Fields("department").value
+            .UserDisplayName = Rcrdset.Fields("displayName").value
+            .UserFirstName = Rcrdset.Fields("givenName").value
+            .UserLastName = Rcrdset.Fields("sn").value
+            .UserCommonName = Trim$(.UserFirstName & " " & .UserLastName)
+            .UserEmailAddress = Rcrdset.Fields("mail").value
+            .UserTelephoneNumber = Rcrdset.Fields("telephoneNumber").value
+        End With
+
+CleanExit:
+    CleanUpADODBObjects Conn, Rcrdset
+    Exit Sub
+
+CleanFail:
+    Resume CleanExit
+
+End Sub
+
+Private Sub GetSystemAttributes()
+        With This
+            .DomainName = LCase$(Environ$("USERDNSDOMAIN"))
+            .MachineName = Environ$("COMPUTERNAME") 'WorkComputerName()
+            .AppVersion = Application.Version
+        End With
+End Sub
+
+Public Sub PrintToImmediateWindow()
+
+    With This
+        'Debug.Print "Windows Verion: "; Tab(20); .WindowsVerion
+        Debug.Print "App Version: "; Tab(20); .AppVersion
+        Debug.Print "Machine Name: "; Tab(20); .MachineName
+        Debug.Print "Site Name: "; Tab(20); .CompanySiteName
+        Debug.Print "Domain DNS Name: "; Tab(20); .DomainName
+        Debug.Print "User Name: "; Tab(20); .Username
+        Debug.Print "Display Name: "; Tab(20); .UserDisplayName
+        Debug.Print "First Name: "; Tab(20); .UserFirstName
+        Debug.Print "Last Name: "; Tab(20); .UserLastName
+        Debug.Print "Common Name: "; Tab(20); .UserCommonName
+        Debug.Print "Email Address: "; Tab(20); .UserEmailAddress
+    End With
+
+End Sub
+
+Private Sub CleanUpADODBObjects(ByRef ConnectionIn As Object, ByRef RecordsetIn As Object)
+
+    'bit-wise comparison
+    If Not ConnectionIn Is Nothing Then
+        If (ConnectionIn.state And ADODB_OBJECT_STATE) = ADODB_OBJECT_STATE Then
+            ConnectionIn.Close
+        End If
+    End If
+    Set ConnectionIn = Nothing
+
+    If Not RecordsetIn Is Nothing Then
+        If (RecordsetIn.state And ADODB_OBJECT_STATE) = ADODB_OBJECT_STATE Then
+            RecordsetIn.Close
+        End If
+    End If
+    Set RecordsetIn = Nothing
+
+End Sub
+
+Private Function NetworkUserName() As String
+    Dim objAD As Object: Set objAD = CreateObject("ADSystemInfo")
+    Dim objUser As Object: Set objUser = GetObject("LDAP://" & objAD.Username)
+    NetworkUserName = objUser.SamAccountName
+    Set objUser = Nothing
+    Set objAD = Nothing
+End Function
+
+Public Function WorkComputerName() As String
+    Dim objNetwork As Object: Set objNetwork = CreateObject("WScript.Network")
+    WorkComputerName = objNetwork.ComputerName
+    Set objNetwork = Nothing
+End Function
+

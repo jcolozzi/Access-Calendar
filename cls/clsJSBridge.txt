@@ -1,0 +1,262 @@
+' =============================================================================
+' clsJSBridge
+' Encapsulates all communication with the WebBrowser0 (Edge WebView2) control.
+'   - Polls for pending JS commands
+'   - Pushes the full calendar+appointment JSON payload to the page
+'   - Wraps ExecuteJavascript / RetrieveJavascriptValue
+'
+' Depends on: clsJSONHelper        (for Escape)
+'             clsRecurrenceEngine   (for BuildOccurrences)
+'             clsCalendarRepo       (for ActiveCalendarID, EnsureActiveCalendar)
+'             clsThemeManager       (for DarkMode)
+'
+' Usage:
+'   Dim br As New clsJSBridge
+'   br.Init Me.WebBrowser0, jsonHelper, recurEngine, calRepo, themeManager
+'   br.SendDataToCalendar ""
+' =============================================================================
+Option Compare Database
+Option Explicit
+
+Private m_WB    As Object           ' WebBrowser0 control reference
+Private m_JSON  As clsJSONHelper
+Private m_Recur As clsRecurrenceEngine
+Private m_Cals  As clsCalendarRepo
+Private m_Theme As clsThemeManager
+
+' -----------------------------------------------------------------------------
+' Init  -  inject all dependencies (call once after New)
+' -----------------------------------------------------------------------------
+Public Sub Init(wbCtl As Object, _
+                jh As clsJSONHelper, _
+                re As clsRecurrenceEngine, _
+                cr As clsCalendarRepo, _
+                th As clsThemeManager)
+    Set m_WB = wbCtl
+    Set m_JSON = jh
+    Set m_Recur = re
+    Set m_Cals = cr
+    Set m_Theme = th
+End Sub
+
+' =============================================================================
+' GetPendingCommand  -  polls JS for a queued command, unescapes and returns it.
+' Returns "" when there is nothing to process.
+' NOTE: combines retrieve + clear into one RetrieveJavascriptValue call to
+'       avoid silent drop of a second rapid-back-to-back ExecuteJavascript call.
+' =============================================================================
+Public Function GetPendingCommand() As String
+    ' Atomically grab-and-clear pendingCommand in a single round-trip
+    Dim raw As String
+    raw = Nz(m_WB.RetrieveJavascriptValue( _
+        "(function(){var c=getPendingCommand();clearPendingCommand();return c;})()"), "")
+    If raw = "" Or raw = "null" Then
+        GetPendingCommand = "": Exit Function
+    End If
+
+    Dim jsonStr As String: jsonStr = raw
+    ' Strip outer quotes and unescape if the value came back wrapped
+    If Left$(jsonStr, 1) = """" And Right$(jsonStr, 1) = """" Then
+        jsonStr = Mid$(jsonStr, 2, Len(jsonStr) - 2)
+        jsonStr = Replace(jsonStr, "\\", "\")
+        jsonStr = Replace(jsonStr, "\""", """")
+    End If
+
+    GetPendingCommand = jsonStr
+End Function
+
+' =============================================================================
+' ExecuteJS  -  thin wrapper around ExecuteJavascript
+' =============================================================================
+Public Sub ExecuteJS(ByVal code As String)
+    m_WB.ExecuteJavascript code
+End Sub
+
+' =============================================================================
+' RetrieveJS  -  thin wrapper around RetrieveJavascriptValue
+' =============================================================================
+Public Function RetrieveJS(ByVal expr As String) As String
+    RetrieveJS = Nz(m_WB.RetrieveJavascriptValue(expr), "")
+End Function
+
+' =============================================================================
+' SendDataToCalendar  -  builds combined JSON (calendars + appointments) and
+' pushes it to the page via window.loadData().
+' Pass a calendarId to jump to that calendar, or "" to restore last known.
+' =============================================================================
+Public Sub SendDataToCalendar(Optional ByVal restoreCalendarId As String = "")
+
+    ' Sync the in-memory tracker
+    If restoreCalendarId <> "" Then
+        m_Cals.ActiveCalendarID = restoreCalendarId
+    Else
+        restoreCalendarId = m_Cals.ActiveCalendarID
+    End If
+
+    Dim db As DAO.Database: Set db = CurrentDb
+
+    ' -- Build calendars JSON -------------------------------------------------
+    Dim rsC As DAO.Recordset
+    Set rsC = db.OpenRecordset( _
+        "SELECT CalendarID, CalendarName, WorkStartTime, WorkEndTime, GroupID, Color " & _
+        "FROM tblCalendars WHERE IsDeleted = False ORDER BY CalendarID", dbOpenSnapshot)
+
+    Dim jsonCals   As String
+    Dim isFirst    As Boolean
+    Dim firstCalId As String
+    jsonCals = "["
+    isFirst = True
+
+    Do Until rsC.EOF
+        If Not isFirst Then jsonCals = jsonCals & ","
+        isFirst = False
+        If firstCalId = "" Then firstCalId = CStr(rsC!CalendarID)
+
+        Dim wStartStr As String, wEndStr As String
+        wStartStr = IIf(IsNull(rsC!WorkStartTime), "", Format(rsC!WorkStartTime, "hh:nn"))
+        wEndStr = IIf(IsNull(rsC!WorkEndTime), "", Format(rsC!WorkEndTime, "hh:nn"))
+
+        Dim gIdStr As String
+        gIdStr = Nz(rsC!GroupID, "")
+
+        Dim cColorStr As String
+        cColorStr = Nz(rsC!Color, "")
+
+        jsonCals = jsonCals & _
+            "{""id"":""" & rsC!CalendarID & """," & _
+            """name"":""" & m_JSON.Escape(Nz(rsC!CalendarName, "")) & """," & _
+            """workStart"":""" & wStartStr & """," & _
+            """workEnd"":""" & wEndStr & """," & _
+            """groupId"":""" & m_JSON.Escape(gIdStr) & """," & _
+            """color"":""" & cColorStr & """}"
+        rsC.MoveNext
+    Loop
+    jsonCals = jsonCals & "]"
+    rsC.Close
+
+    ' Default to first calendar if none active yet
+    m_Cals.EnsureActiveCalendar firstCalId
+    If restoreCalendarId = "" Then restoreCalendarId = m_Cals.ActiveCalendarID
+
+    ' -- Build calendarGroups JSON ---------------------------------------------
+    Dim rsG As DAO.Recordset
+    Set rsG = db.OpenRecordset( _
+        "SELECT GroupID, GroupName FROM tblCalendarGroups WHERE IsDeleted = False ORDER BY GroupID", _
+        dbOpenSnapshot)
+
+    Dim jsonGroups As String
+    jsonGroups = "["
+    Dim gFirst As Boolean: gFirst = True
+    Do Until rsG.EOF
+        If Not gFirst Then jsonGroups = jsonGroups & ","
+        gFirst = False
+        jsonGroups = jsonGroups & _
+            "{""id"":""" & rsG!GroupID & """," & _
+            """name"":""" & m_JSON.Escape(Nz(rsG!GroupName, "")) & """}"
+        rsG.MoveNext
+    Loop
+    jsonGroups = jsonGroups & "]"
+    rsG.Close
+
+    ' -- Build appointments JSON (includes recurrence expansion) ---------------
+    Dim rsA As DAO.Recordset
+    Set rsA = db.OpenRecordset( _
+        "SELECT AppointmentID, CalendarID, Title, StartApptDate, StartTime, EndTime, " & _
+        "       AllDay, Color, Notes, EndApptDate, " & _
+        "       RecurType, RecurInterval, RecurDaysOfWeek, RecurMonthlyMode, " & _
+        "       RecurMonthDay, RecurMonthWeek, RecurMonthDOW, " & _
+        "       RecurEndType, RecurEndDate, RecurCount, RecurExceptions, " & _
+        "       ReminderMinutes, ReminderFired " & _
+        "FROM tblAppointments WHERE IsDeleted = False", dbOpenSnapshot)
+
+    Dim jsonAppts  As String
+    Dim defaultClr As String: defaultClr = "#4f46e5"
+    jsonAppts = "["
+    isFirst = True
+
+    Dim winStart As Date, winEnd As Date
+    winStart = Date - 60
+    winEnd = DateSerial(Year(Date) + 5, Month(Date), Day(Date))
+
+    Do Until rsA.EOF
+        Dim rT As String: rT = Nz(rsA!RecurType, "none")
+
+        If rT = "none" Or rT = "" Then
+            ' -- Non-recurring --
+            If Not isFirst Then jsonAppts = jsonAppts & ","
+            isFirst = False
+
+            Dim aDateStr    As String
+            Dim aEndDateStr As String
+            Dim aStartStr   As String
+            Dim aEndStr     As String
+            Dim aColorStr   As String
+            Dim aRemMinsStr As String
+
+            aDateStr    = IIf(IsNull(rsA!StartApptDate), "", Format(rsA!StartApptDate, "yyyy-mm-dd"))
+            aEndDateStr = IIf(IsNull(rsA!EndApptDate), "", Format(rsA!EndApptDate, "yyyy-mm-dd"))
+            aStartStr   = IIf(IsNull(rsA!StartTime), "", Format(rsA!StartTime, "hh:nn"))
+            aEndStr     = IIf(IsNull(rsA!EndTime), "", Format(rsA!EndTime, "hh:nn"))
+            aColorStr   = IIf(IsNull(rsA!color) Or Nz(rsA!color, "") = "", defaultClr, CStr(rsA!color))
+            aRemMinsStr = CStr(Nz(rsA!ReminderMinutes, -1))
+
+            jsonAppts = jsonAppts & "{" & _
+                """id"":" & rsA!AppointmentID & "," & _
+                """calendarId"":""" & Nz(rsA!CalendarID, "") & """," & _
+                """title"":""" & m_JSON.Escape(Nz(rsA!Title, "")) & """," & _
+                """date"":""" & aDateStr & """," & _
+                """endDate"":""" & aEndDateStr & """," & _
+                """start"":""" & aStartStr & """," & _
+                """end"":""" & aEndStr & """," & _
+                """allDay"":" & IIf(Nz(rsA!allDay, False), "true", "false") & "," & _
+                """color"":""" & aColorStr & """," & _
+                """notes"":""" & m_JSON.Escape(Nz(rsA!Notes, "")) & """," & _
+                """reminderMinutes"":" & aRemMinsStr & "," & _
+                """recurType"":""none""" & _
+                "}"
+        Else
+            ' -- Recurring: expand into virtual occurrences --
+            Dim rJson As String
+            rJson = m_Recur.BuildOccurrences(rsA, winStart, winEnd)
+            If rJson <> "" Then
+                If Not isFirst Then jsonAppts = jsonAppts & ","
+                isFirst = False
+                jsonAppts = jsonAppts & rJson
+            End If
+        End If
+
+        rsA.MoveNext
+    Loop
+    jsonAppts = jsonAppts & "]"
+    rsA.Close
+
+    ' -- Combine payload and push ---------------------------------------------
+    Dim payload As String
+    ' -- Build openCalendarIds JSON array from comma-separated string ----------
+    Dim openIdsStr As String
+    openIdsStr = m_Cals.OpenCalendarIds
+    Dim openArr() As String
+    Dim jsonOpenIds As String
+    jsonOpenIds = "["
+    If openIdsStr <> "" Then
+        openArr = Split(openIdsStr, ",")
+        Dim oi As Long
+        For oi = LBound(openArr) To UBound(openArr)
+            If oi > LBound(openArr) Then jsonOpenIds = jsonOpenIds & ","
+            jsonOpenIds = jsonOpenIds & """" & Trim(openArr(oi)) & """"
+        Next oi
+    End If
+    jsonOpenIds = jsonOpenIds & "]"
+
+    payload = "{""calendars"":" & jsonCals & "," & _
+              """calendarGroups"":" & jsonGroups & "," & _
+              """appointments"":" & jsonAppts & "," & _
+              """openCalendarIds"":" & jsonOpenIds & "," & _
+              """primaryCalendarId"":""" & m_Cals.ActiveCalendarID & """," & _
+              """activeCalendarId"":""" & restoreCalendarId & """," & _
+              """darkMode"":" & IIf(m_Theme.DarkMode, "true", "false") & "}"
+
+    m_WB.ExecuteJavascript "window.loadData(JSON.stringify(" & payload & "));"
+
+    Set db = Nothing
+End Sub
