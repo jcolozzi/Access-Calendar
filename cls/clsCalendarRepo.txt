@@ -98,6 +98,7 @@ Public Function Add(ByVal jsonStr As String) As String
     Dim newCalId As String: newCalId = CStr(rs!CalendarID)
     rs.Close: Set rs = Nothing: Set db = Nothing
 
+    LogChange "calendar", CLng(newCalId), "add"
     m_ActiveCalendarID = newCalId
     Add = newCalId
 End Function
@@ -140,6 +141,7 @@ Public Sub Edit(ByVal jsonStr As String)
     If cColor <> "" Then rs!Color = cColor
     rs.Update
     rs.Close: Set rs = Nothing: Set db = Nothing
+    LogChange "calendar", CLng(cId), "update"
 End Sub
 
 ' =============================================================================
@@ -167,6 +169,8 @@ Public Function Delete(ByVal jsonStr As String) As String
     db.Execute _
         "UPDATE tblAppointments SET IsDeleted = True, ModifiedOn = Now() " & _
         "WHERE CalendarID = '" & Replace(CStr(delIdNum), "'", "''") & "'", dbFailOnError
+
+    LogChange "calendar", delIdNum, "delete"
 
     ' Find first remaining calendar
     Dim rsFirst As DAO.Recordset

@@ -130,6 +130,15 @@ Public Function Save(ByVal jsonStr As String) As String
     End If
 
     rs.Update
+
+    ' Log the change for pub/sub cross-session sync
+    If numId = 0 Then
+        rs.Bookmark = rs.LastModified
+        LogChange "appointment", CLng(rs!AppointmentID), "add"
+    Else
+        LogChange "appointment", numId, "update"
+    End If
+
     rs.Close
     Set rs = Nothing: Set db = Nothing
     Save = calId
@@ -169,6 +178,7 @@ Public Sub Move(ByVal jsonStr As String)
         rs!EndApptDate = mvNewEnd
         rs!ModifiedOn = Now()
         rs.Update
+        LogChange "appointment", CLng(mvId), "update"
     End If
 
     rs.Close: Set rs = Nothing: Set db = Nothing
@@ -205,6 +215,7 @@ Public Sub Resize(ByVal jsonStr As String)
         rs!EndTime = m_Date.HMToTime(rzEnd)
         rs!ModifiedOn = Now()
         rs.Update
+        LogChange "appointment", rzNumId, "update"
     End If
 
     rs.Close: Set rs = Nothing: Set db = Nothing
@@ -248,6 +259,7 @@ Public Sub RescheduleOccurrence(ByVal jsonStr As String)
         rsMaster!RecurExceptions = roExcJson
         rsMaster!ModifiedOn = Now()
         rsMaster.Update
+        LogChange "appointment", roMasterId, "update"
     End If
     rsMaster.Close: Set rsMaster = Nothing
 
@@ -284,6 +296,8 @@ Public Sub RescheduleOccurrence(ByVal jsonStr As String)
     End If
     rsNew!ReminderFired = False
     rsNew.Update
+    rsNew.Bookmark = rsNew.LastModified
+    LogChange "appointment", CLng(rsNew!AppointmentID), "add"
     rsNew.Close: Set rsNew = Nothing
     Set db = Nothing
 End Sub
@@ -296,6 +310,7 @@ Public Sub Delete(ByVal jsonStr As String)
     CurrentDb.Execute _
         "UPDATE tblAppointments SET IsDeleted = True, ModifiedOn = Now() " & _
         "WHERE AppointmentID = " & CLng(dlId), dbFailOnError
+    LogChange "appointment", CLng(dlId), "delete"
 End Sub
 
 ' =============================================================================
@@ -324,6 +339,7 @@ Public Sub DeleteOccurrence(ByVal jsonStr As String)
         rs!RecurExceptions = excJson
         rs!ModifiedOn = Now()
         rs.Update
+        LogChange "appointment", doId, "update"
     End If
     rs.Close: Set rs = Nothing: Set db = Nothing
 End Sub
@@ -337,4 +353,5 @@ Public Sub DeleteSeries(ByVal jsonStr As String)
     CurrentDb.Execute _
         "UPDATE tblAppointments SET IsDeleted = True, ModifiedOn = Now() " & _
         "WHERE AppointmentID = " & dsId, dbFailOnError
+    LogChange "appointment", dsId, "delete"
 End Sub

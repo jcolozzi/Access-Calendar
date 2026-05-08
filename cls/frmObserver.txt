@@ -1,0 +1,110 @@
+' =============================================================================
+' frmObserver  (code-behind for the hidden observer form)
+'
+' Polls tblChangeLog every 3 seconds for changes made by OTHER users.
+' When changes are detected, publishes events via clsPubSubBroker so the
+' main form (frmCalendar) can refresh the UI.
+'
+' Form properties (set in Design View or via AccessPOSH):
+'   TimerInterval = 3000
+'   PopUp = True
+'   RecordSelectors = False
+'   NavigationButtons = False
+'   ScrollBars = Neither
+'   HasModule = True
+'   OnLoad = [Event Procedure]
+'   OnTimer = [Event Procedure]
+'
+' Opened hidden by frmCalendar:
+'   DoCmd.OpenForm "frmObserver", , , , , acHidden
+'
+' Mirrors the Kanbantt frmPubSub pattern.
+' =============================================================================
+Option Compare Database
+Option Explicit
+
+Private mlngLastChangeID As Long
+Private mstrCurrentUser  As String
+Private mblnProcessing   As Boolean
+Private mBroker          As clsPubSubBroker
+
+' -----------------------------------------------------------------------------
+' SetBroker  -  called by frmCalendar after opening this form hidden
+' -----------------------------------------------------------------------------
+Public Sub SetBroker(ByVal oBroker As clsPubSubBroker)
+    Set mBroker = oBroker
+End Sub
+
+' -----------------------------------------------------------------------------
+' Form_Load  -  capture current user and last known change ID
+' -----------------------------------------------------------------------------
+Private Sub Form_Load()
+    mstrCurrentUser = Environ$("USERNAME")
+    mlngLastChangeID = Nz(DMax("ChangeID", "tblChangeLog"), 0)
+End Sub
+
+' -----------------------------------------------------------------------------
+' Form_Timer  -  poll tblChangeLog for new rows from OTHER users
+' -----------------------------------------------------------------------------
+Private Sub Form_Timer()
+    If mblnProcessing Then Exit Sub
+    If mBroker Is Nothing Then Exit Sub
+    mblnProcessing = True
+    On Error GoTo ErrHandler
+
+    Dim db As DAO.Database
+    Dim rs As DAO.Recordset
+    Dim strSQL As String
+    strSQL = "SELECT ChangeID, ChangeType FROM tblChangeLog " & _
+        "WHERE ChangeID > " & mlngLastChangeID & _
+        " AND ChangedBy <> '" & Replace$(mstrCurrentUser, "'", "''") & "'" & _
+        " ORDER BY ChangeID"
+    Set db = CurrentDb
+    Set rs = db.OpenRecordset(strSQL, dbOpenSnapshot)
+
+    If rs.EOF Then
+        rs.Close: Set rs = Nothing: Set db = Nothing
+        mblnProcessing = False
+        Exit Sub
+    End If
+
+    Dim lngMaxID        As Long:    lngMaxID = mlngLastChangeID
+    Dim blnApptsChanged As Boolean
+    Dim blnCalsChanged  As Boolean
+    Dim strType         As String
+
+    Do Until rs.EOF
+        strType = Nz(rs!ChangeType, "")
+        If rs!ChangeID > lngMaxID Then lngMaxID = rs!ChangeID
+
+        Select Case strType
+            Case "appointment"
+                blnApptsChanged = True
+            Case "calendar", "group"
+                blnCalsChanged = True
+        End Select
+
+        rs.MoveNext
+    Loop
+    rs.Close: Set rs = Nothing: Set db = Nothing
+
+    mlngLastChangeID = lngMaxID
+
+    ' Signal the broker — main form will do a full data reload
+    If blnApptsChanged Then
+        mBroker.PublishAppointmentsChanged "reload"
+    End If
+    If blnCalsChanged Then
+        mBroker.PublishCalendarsChanged "reload"
+    End If
+
+    mblnProcessing = False
+    Exit Sub
+
+ErrHandler:
+    Me.TimerInterval = 0
+    If Not mBroker Is Nothing Then
+        mBroker.PublishError Err.Description
+    End If
+    mblnProcessing = False
+End Sub

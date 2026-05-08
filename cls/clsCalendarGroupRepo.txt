@@ -43,6 +43,7 @@ Public Function Add(ByVal jsonStr As String) As String
     Dim newId As String: newId = CStr(rs!GroupID)
     rs.Close: Set rs = Nothing: Set db = Nothing
 
+    LogChange "group", CLng(newId), "add"
     Add = newId
 End Function
 
@@ -63,6 +64,7 @@ Public Sub Rename(ByVal jsonStr As String)
         Replace(gName, """", """""") & """ " & _
         "WHERE GroupID = " & CLng(gId), dbFailOnError
 
+    LogChange "group", CLng(gId), "update"
     Set db = Nothing
 End Sub
 
@@ -88,6 +90,7 @@ Public Sub Delete(ByVal jsonStr As String)
         "UPDATE tblCalendarGroups SET IsDeleted = True " & _
         "WHERE GroupID = " & gIdNum, dbFailOnError
 
+    LogChange "group", gIdNum, "delete"
     Set db = Nothing
 End Sub
 
@@ -113,5 +116,6 @@ Public Sub MoveCalendar(ByVal jsonStr As String)
     End If
 
     db.Execute sql, dbFailOnError
+    LogChange "calendar", CLng(calId), "update"
     Set db = Nothing
 End Sub

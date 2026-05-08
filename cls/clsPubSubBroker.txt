@@ -1,0 +1,35 @@
+' =============================================================================
+' clsPubSubBroker
+' Thin event-dispatcher class.  Defines events that the hidden frmObserver
+' raises after polling tblChangeLog.  The main form (frmCalendar) subscribes
+' with "WithEvents mBroker As clsPubSubBroker" to receive notifications.
+'
+' Mirrors the Kanbantt clsPubSubBroker pattern — keeps the broker class
+' deliberately thin; all polling logic lives in frmObserver.
+' =============================================================================
+Option Compare Database
+Option Explicit
+
+' Event: one or more appointments were changed by another session
+Public Event AppointmentsChanged(ByVal strPayload As String)
+
+' Event: one or more calendars or calendar groups were changed
+Public Event CalendarsChanged(ByVal strPayload As String)
+
+' Event: the observer polling loop encountered an error
+Public Event PollingError(ByVal strErrDesc As String)
+
+' Publishes an AppointmentsChanged event
+Public Sub PublishAppointmentsChanged(ByVal strPayload As String)
+    RaiseEvent AppointmentsChanged(strPayload)
+End Sub
+
+' Publishes a CalendarsChanged event
+Public Sub PublishCalendarsChanged(ByVal strPayload As String)
+    RaiseEvent CalendarsChanged(strPayload)
+End Sub
+
+' Publishes a PollingError event
+Public Sub PublishError(ByVal strErrDesc As String)
+    RaiseEvent PollingError(strErrDesc)
+End Sub

@@ -14,6 +14,7 @@ Private m_Bridge     As clsJSBridge
 Private m_CmdProc    As clsCommandProcessor
 Private m_Reminders  As clsReminderManager
 Private m_Processing As Boolean
+Private WithEvents mBroker As clsPubSubBroker
 
 Private Const CALENDAR_NAME As String = "calendarv27.html"
 
@@ -49,6 +50,12 @@ Private Sub Form_Load()
     ' -- Phase 6: command processor -------------------------------------------
     Set m_CmdProc = New clsCommandProcessor
     m_CmdProc.Init jh, ar, cr, gr, th
+
+    ' -- Phase 7: pub/sub broker (cross-session sync) -------------------------
+    Set mBroker = New clsPubSubBroker
+    DoCmd.OpenForm "frmObserver", , , , , acHidden
+    Forms!frmObserver.SetBroker mBroker
+    PurgeChangeLog 7
 
     ' -- Navigate to calendar HTML --------------------------------------------
     Me.WebBrowser0.Navigate "https://msaccess/" & CurrentProject.Path & "\" & CALENDAR_NAME
@@ -108,4 +115,32 @@ End Sub
 ' Manual refresh entry point (can be called from a form button, etc.)
 Public Sub RefreshCalendar()
     m_Bridge.SendDataToCalendar
+End Sub
+
+' =============================================================================
+' PubSub event handlers  (cross-session sync via frmObserver)
+' =============================================================================
+
+Private Sub mBroker_AppointmentsChanged(ByVal strPayload As String)
+    m_Bridge.SendDataToCalendar
+End Sub
+
+Private Sub mBroker_CalendarsChanged(ByVal strPayload As String)
+    m_Bridge.SendDataToCalendar
+End Sub
+
+Private Sub mBroker_PollingError(ByVal strErrDesc As String)
+    m_Bridge.ExecuteJS _
+        "setStatus('error','Sync error: " & Replace(strErrDesc, "'", "") & "');"
+End Sub
+
+' =============================================================================
+' Teardown
+' =============================================================================
+
+Private Sub Form_Unload(Cancel As Integer)
+    If CurrentProject.AllForms("frmObserver").IsLoaded Then
+        DoCmd.Close acForm, "frmObserver", acSaveNo
+    End If
+    Set mBroker = Nothing
 End Sub
