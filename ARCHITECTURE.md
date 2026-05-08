@@ -21,6 +21,8 @@
 │                  VBA Class Modules (Data & Logic)           │
 │           Access Form + 10 OOP Class Modules                │
 └─────────────────────────────────────────────────────────────┘
+     Pub/Sub Layer (Cross-Session Sync)
+     frmObserver (3s timer) → clsPubSubBroker → frmCalendar (WithEvents)
      DAO Database Access (SQL)
 ┌─────────────────────────────────────────────────────────────┐
 │      Access Database (tblAppointments, tblCalendars, etc.)  │
@@ -62,6 +64,12 @@ Private Sub Form_Load()
     ' Phase 6: Create command dispatcher
     Set m_CmdProc = New clsCommandProcessor
     m_CmdProc.Init jh, ar, cr, gr, th
+    
+    ' Phase 7: Pub/sub broker (cross-session sync)
+    Set mBroker = New clsPubSubBroker
+    DoCmd.OpenForm "frmObserver", , , , , acHidden
+    Forms!frmObserver.SetBroker mBroker
+    PurgeChangeLog 7
     
     ' Navigate WebView2 to HTML file
     Me.WebBrowser0.Navigate "https://msaccess/" & CurrentProject.Path & "\calendar.html"
@@ -234,7 +242,41 @@ End Function
 
 ---
 
-## 📚 VBA Class Modules Overview
+## � Cross-Session Sync (Pub/Sub)
+
+When multiple Access sessions have `frmCalendar` open simultaneously, any data change in one session is reflected in all others within ~3 seconds.
+
+### Flow
+
+```
+User A makes change
+  → repo calls LogChange(strChangeType, lngRecordId, strAction)
+      → tblChangeLog row inserted (ChangeType, RecordID, Action, ChangedBy, ChangedOn)
+
+frmObserver timer fires every 3s (in every open session)
+  → queries tblChangeLog WHERE ChangeID > mlngLastChangeID AND ChangedBy <> mstrCurrentUser
+  → appointment rows found → mBroker.PublishAppointmentsChanged "reload"
+  → calendar/group rows found → mBroker.PublishCalendarsChanged "reload"
+
+frmCalendar event handlers fire (Private WithEvents mBroker As clsPubSubBroker)
+  → mBroker_AppointmentsChanged / mBroker_CalendarsChanged
+      → m_Bridge.SendDataToCalendar   ' full state reload in this session
+```
+
+### Components
+
+| Component | Role |
+| ----------- | ------ |
+| `tblChangeLog` | Audit table; one row per data-mutating operation |
+| `mod_ChangeLog.LogChange` | Called by every repo after a write; inserts the change row |
+| `mod_ChangeLog.PurgeChangeLog` | Deletes rows older than N days (called during Form_Load) |
+| `clsPubSubBroker` | Thin event dispatcher; `RaiseEvent` only, no business logic |
+| `frmObserver` | Hidden form; 3-second timer polls `tblChangeLog` and fires broker events |
+| `frmCalendar` | Subscribes via `WithEvents mBroker`; reloads UI on broker events |
+
+---
+
+## �📚 VBA Class Modules Overview
 
 ### **clsJSONHelper** — Utility for JSON
 
@@ -485,6 +527,45 @@ Public Function ProcessCommand(ByVal jsonStr As String) As String
     End Select
 End Function
 ```
+
+---
+
+### **mod_ChangeLog** — Change Audit Log
+
+- **`LogChange(strChangeType, lngRecordId, strAction)`**: Inserts one row into `tblChangeLog`. `strChangeType` is `"appointment"`, `"calendar"`, or `"group"`. `strAction` is `"add"`, `"update"`, or `"delete"`. Records `ChangedBy = ENVIRON$("USERNAME")` and `ChangedOn = Now()`.
+- **`PurgeChangeLog(lngRetainDays)`**: Deletes rows older than *N* days to keep the table small.
+
+Called by every mutating method in `clsAppointmentRepo`, `clsCalendarRepo`, and `clsCalendarGroupRepo` immediately after the DAO write.
+
+---
+
+### **clsPubSubBroker** — Event Dispatcher
+
+A thin event-only class module. Declares three events and exposes one publish method per event:
+
+```vba
+Public Event AppointmentsChanged(strPayload As String)
+Public Event CalendarsChanged(strPayload As String)
+Public Event PollingError(strErrDesc As String)
+
+Public Sub PublishAppointmentsChanged(strPayload As String)
+    RaiseEvent AppointmentsChanged(strPayload)
+End Sub
+' ... PublishCalendarsChanged, PublishError identical pattern
+```
+
+Contains **no business logic** — it is a pure event bus.
+
+---
+
+### **frmObserver** — Hidden Polling Form
+
+Opened via `DoCmd.OpenForm "frmObserver", , , , , acHidden`. Not visible to the user.
+
+- `SetBroker(oBroker As clsPubSubBroker)`: Stores the broker reference passed from `frmCalendar`.
+- `Form_Load`: Captures `mlngLastChangeID = DMax("ChangeID","tblChangeLog")` and `mstrCurrentUser = ENVIRON$("USERNAME")`.
+- `Form_Timer` (3 000 ms): Queries `tblChangeLog WHERE ChangeID > mlngLastChangeID AND ChangedBy <> mstrCurrentUser`. Detects whether appointment or calendar/group rows are present and calls the appropriate `mBroker.Publish*` method. Stops the timer on error.
+- `Form_Unload`: Clears the broker reference.
 
 ---
 
@@ -803,8 +884,9 @@ Based on code, the database contains:
 | **tblAppointments** | AppointmentID (PK), CalendarID (FK), Title, StartApptDate, StartTime, EndTime, AllDay, Color, Notes, RecurType, RecurInterval, RecurDaysOfWeek, RecurMonthlyMode, RecurMonthDay, RecurMonthWeek, RecurMonthDOW, RecurEndType, RecurEndDate, RecurCount, RecurExceptions, ReminderMinutes, ReminderFired, IsDeleted |
 | **tblCalendars** | CalendarID (PK), GroupID (FK), CalendarName, Color, IsDeleted |
 | **tblCalendarGroups** | GroupID (PK), GroupName, IsDeleted |
+| **tblChangeLog** | ChangeID (AutoNumber PK), ChangeType (Text 50), RecordID (Long), Action (Text 20), ChangedBy (Text 100), ChangedOn (DateTime) |
 
-All tables use soft-delete (`IsDeleted = True`) rather than hard deletion.
+All tables use soft-delete (`IsDeleted = True`) rather than hard deletion. `tblChangeLog` rows are periodically purged by `PurgeChangeLog` (default: retain 7 days).
 
 ---
 
@@ -816,6 +898,7 @@ All tables use soft-delete (`IsDeleted = True`) rather than hard deletion.
 2. **Add VBA case** in `clsCommandProcessor.ProcessCommand()`
 3. **Add repo method** (e.g., `clsSettingsRepo.Save(jsonStr)`)
 4. **Return reload code** ("NORELOAD" or CalendarID)
+5. **Call `LogChange`** in any new repo method that mutates data so the pub/sub observer picks up the change and notifies other open sessions automatically.
 
 ### **Add a New Field to Appointments**
 
@@ -845,5 +928,8 @@ All tables use soft-delete (`IsDeleted = True`) rather than hard deletion.
 | **clsJSBridge** | VBA ↔ JS communication (polling, callbacks) |
 | **clsCommandProcessor** | Router: dispatches actions to repos |
 | **Form (VBA)** | Initialization, timer loop, singleton instances |
+| **mod_ChangeLog** | Writes/purges change audit rows to `tblChangeLog` |
+| **clsPubSubBroker** | Event dispatcher: raises `AppointmentsChanged`, `CalendarsChanged`, `PollingError` |
+| **frmObserver** | Hidden form; polls `tblChangeLog` every 3s, publishes via `mBroker` |
 
 **The key insight:** JS handles UI and user input; VBA handles data integrity and business logic. They communicate via JSON command queue + full state sync.

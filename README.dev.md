@@ -40,6 +40,7 @@ Data flow (simplified):
 3. `clsCommandProcessor` dispatches the command to repositories/managers.
 4. `clsJSBridge.SendDataToCalendar` sends full JSON state back to JS.
 5. `window.loadData(...)` rehydrates UI state and re-renders.
+6. `frmObserver` (hidden, 3 s timer) polls `tblChangeLog` for changes by other users; `clsPubSubBroker` raises events that trigger `SendDataToCalendar` in other open sessions.
 
 ## Repository Layout
 
@@ -48,7 +49,11 @@ Access-Calendar/
   Calendar.accdb
   calendar.html
   ARCHITECTURE.md
+  bas/
+    mod_ChangeLog.bas
   cls/
+    clsPubSubBroker.txt
+    frmObserver.txt
     clsAppointmentRepo.txt
     clsCalendarGroupRepo.txt
     clsCalendarRepo.txt
@@ -65,6 +70,9 @@ Access-Calendar/
 
 ## Core VBA Components
 
+- `mod_ChangeLog`: `LogChange` / `PurgeChangeLog` — audit trail for pub/sub sync
+- `clsPubSubBroker`: event dispatcher (AppointmentsChanged, CalendarsChanged, PollingError)
+- `frmObserver`: hidden polling form — reads tblChangeLog every 3 s, broadcasts changes to active sessions
 - `clsJSONHelper`: JSON escaping and lightweight extraction helpers
 - `clsDateHelper`: ISO/date/time conversion and date math helpers
 - `clsRecurrenceEngine`: expands recurring masters into virtual occurrences
@@ -89,6 +97,9 @@ Primary tables used by the app:
   - Uses soft-delete (`IsDeleted`)
 - `tblCalendarGroups`
   - Group names and soft-delete flag
+- `tblChangeLog`
+  - ChangeID (AutoNumber PK), ChangeType (Text), RecordID (Long), Action (Text), ChangedBy (Text), ChangedOn (DateTime)
+  - Purged automatically after 7 days via `PurgeChangeLog`
 
 ## Command Contract (JS -> VBA)
 
@@ -114,6 +125,9 @@ If you are rebuilding the form/classes from this folder export:
 2. Paste `cls/vba_form_code_behind.txt` into your Access form module.
 3. Ensure your form contains an Edge browser control named `WebBrowser0`.
 4. Keep `calendar.html` in the same folder as `Calendar.accdb` (or adjust navigation path).
+5. Import `bas/mod_ChangeLog.bas` as a standard module.
+6. Create the `frmObserver` hidden form and import its code-behind from `cls/frmObserver.txt`.
+7. Create the `tblChangeLog` table (ChangeID AutoNumber PK, ChangeType Text, RecordID Long, Action Text, ChangedBy Text, ChangedOn DateTime).
 
 ## Important Filename Note
 

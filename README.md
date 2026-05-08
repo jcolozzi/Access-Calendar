@@ -17,6 +17,7 @@ It brings a polished scheduling interface to Access while keeping your data and 
 - Calendar groups and color-based organization
 - Reminder popups and theme preferences
 - Fast drag/drop and resize interactions
+- Live cross-session sync — changes by one user appear in other open sessions within ~3 seconds
 
 ## Screenshots
 
@@ -46,6 +47,7 @@ It brings a polished scheduling interface to Access while keeping your data and 
 
 - `calendar.html`: calendar UI (HTML/CSS/JavaScript)
 - `cls/`: VBA classes for bridge, command routing, repos, recurrence, reminders
+- `bas/`: Standard VBA modules (change log for cross-session sync)
 - `ARCHITECTURE.md`: deeper architecture and integration notes
 
 ## Documentation
