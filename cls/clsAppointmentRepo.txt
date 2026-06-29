@@ -42,6 +42,7 @@ Public Function Save(ByVal jsonStr As String) As String
     Dim tEnd    As String:  tEnd = m_JSON.ExtractValue(jsonStr, "end")
     Dim color   As String:  color = m_JSON.ExtractValue(jsonStr, "color")
     Dim Notes   As String:  Notes = m_JSON.ExtractValue(jsonStr, "notes")
+    Dim Loc     As String:  Loc = m_JSON.ExtractValue(jsonStr, "location")
     Dim bAllDay As Boolean: bAllDay = (m_JSON.ExtractValue(jsonStr, "allDay") = "true")
 
     ' Recurrence fields
@@ -93,6 +94,7 @@ Public Function Save(ByVal jsonStr As String) As String
     End If
     rs!color = IIf(Nz(color, "") = "", "#4f46e5", color)
     rs!Notes = Nz(Notes, "")
+    rs!Location = Nz(Loc, "")
 
     ' Reminder — use If/Then to avoid IIf evaluating both branches (VBA bug)
     Dim rMinsStr As String: rMinsStr = Nz(m_JSON.ExtractValue(jsonStr, "reminderMinutes"), "-1")
@@ -238,6 +240,7 @@ Public Sub RescheduleOccurrence(ByVal jsonStr As String)
     Dim roCalId    As String: roCalId = m_JSON.ExtractValue(jsonStr, "calendarId")
     Dim roColor    As String: roColor = Nz(m_JSON.ExtractValue(jsonStr, "color"), "#4f46e5")
     Dim roNotes    As String: roNotes = Nz(m_JSON.ExtractValue(jsonStr, "notes"), "")
+    Dim roLoc      As String: roLoc = Nz(m_JSON.ExtractValue(jsonStr, "location"), "")
     Dim roBAllDay  As Boolean: roBAllDay = (m_JSON.ExtractValue(jsonStr, "allDay") = "true")
     Dim roReminderMins As Integer: roReminderMins = CInt(Nz(m_JSON.ExtractValue(jsonStr, "reminderMinutes"), -1))
 
@@ -275,6 +278,7 @@ Public Sub RescheduleOccurrence(ByVal jsonStr As String)
     rsNew!allDay = roBAllDay
     rsNew!color = roColor
     rsNew!Notes = roNotes
+    rsNew!Location = roLoc
     rsNew!ModifiedOn = Now()
     rsNew!IsDeleted = False
     rsNew!RecurType = "none"

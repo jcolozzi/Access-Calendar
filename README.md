@@ -16,6 +16,9 @@ It brings a polished scheduling interface to Access while keeping your data and 
 - Recurring events with occurrence-level operations
 - Calendar groups and color-based organization
 - Reminder popups and theme preferences
+- Add events to your Outlook calendar (single or recurring)
+- Export events to `.ics` files and attach them to a new Outlook email
+- Optional location field on events
 - Fast drag/drop and resize interactions
 - Live cross-session sync — changes by one user appear in other open sessions within ~3 seconds
 
@@ -45,8 +48,10 @@ It brings a polished scheduling interface to Access while keeping your data and 
 
 ## Project Layout
 
-- `calendar.html`: calendar UI (HTML/CSS/JavaScript)
-- `cls/`: VBA classes for bridge, command routing, repos, recurrence, reminders
+- `calendar.html`: calendar UI markup
+- `css/calendar.css`: calendar styles
+- `js/`: calendar UI logic (`calendar.js`), ICS export (`calendar.ics.js`), and the vendored `vendor/ics.js`
+- `cls/`: VBA classes for bridge, command routing, repos, recurrence, reminders, and Outlook/ICS export
 - `bas/`: Standard VBA modules (change log for cross-session sync)
 - `ARCHITECTURE.md`: deeper architecture and integration notes
 

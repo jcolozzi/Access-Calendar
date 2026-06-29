@@ -47,27 +47,27 @@ Public Function ExtractValue(ByVal jsonStr As String, ByVal key As String) As St
 
     ' Skip whitespace after colon
     Do While startPos <= Len(jsonStr) And _
-             (Mid$(jsonStr, startPos, 1) = " " Or _
-              Mid$(jsonStr, startPos, 1) = vbTab Or _
-              Mid$(jsonStr, startPos, 1) = vbCr Or _
-              Mid$(jsonStr, startPos, 1) = vbLf)
+             (mID$(jsonStr, startPos, 1) = " " Or _
+              mID$(jsonStr, startPos, 1) = vbTab Or _
+              mID$(jsonStr, startPos, 1) = vbCr Or _
+              mID$(jsonStr, startPos, 1) = vbLf)
         startPos = startPos + 1
     Loop
 
     If startPos > Len(jsonStr) Then Exit Function
 
-    If Mid$(jsonStr, startPos, 1) = """" Then
+    If mID$(jsonStr, startPos, 1) = """" Then
         ' Quoted string value
         startPos = startPos + 1
         endPos = InStr(startPos, jsonStr, """")
         If endPos = 0 Then Exit Function
-        ExtractValue = Mid$(jsonStr, startPos, endPos - startPos)
+        ExtractValue = mID$(jsonStr, startPos, endPos - startPos)
     Else
         ' Unquoted value (number, boolean, null)
         endPos = InStr(startPos, jsonStr, ",")
         If endPos = 0 Then endPos = InStr(startPos, jsonStr, "}")
         If endPos = 0 Then Exit Function
-        ExtractValue = Trim$(Mid$(jsonStr, startPos, endPos - startPos))
+        ExtractValue = Trim$(mID$(jsonStr, startPos, endPos - startPos))
     End If
 End Function
 
@@ -80,23 +80,30 @@ Public Function BuildOccJSON(mID As Long, dStr As String, _
     rType As String, rInt As Integer, rDOW As String, rMMode As String, _
     rMDay As Integer, rMWeek As Integer, rMDOW As Integer, _
     rEType As String, rEDStr As String, rECnt As Integer, rSStr As String, _
-    reminderMins As Integer) As String
+    reminderMins As Integer, locEsc As String) As String
 
-    BuildOccJSON = "{" & _
+    Dim s As String
+
+    s = "{" & _
         """id"":""r" & mID & "_" & dStr & """," & _
         """recurMasterId"":" & mID & "," & _
         """calendarId"":""" & calId & """," & _
         """title"":""" & tEsc & """," & _
         """date"":""" & dStr & """," & _
         """start"":""" & sStr & """," & _
-        """end"":""" & eStr & """," & _
+        """end"":""" & eStr & ""","
+
+    s = s & _
         """allDay"":" & aDStr & "," & _
         """color"":""" & clStr & """," & _
         """notes"":""" & nEsc & """," & _
+        """location"":""" & locEsc & """," & _
         """isRecurring"":true," & _
         """recurType"":""" & rType & """," & _
         """recurInterval"":" & rInt & "," & _
-        """recurDaysOfWeek"":""" & rDOW & """," & _
+        """recurDaysOfWeek"":""" & rDOW & ""","
+
+    s = s & _
         """recurMonthlyMode"":""" & rMMode & """," & _
         """recurMonthDay"":" & rMDay & "," & _
         """recurMonthWeek"":" & rMWeek & "," & _
@@ -107,5 +114,7 @@ Public Function BuildOccJSON(mID As Long, dStr As String, _
         """recurRangeStart"":""" & rSStr & """," & _
         """reminderMinutes"":" & reminderMins & _
         "}"
+
+    BuildOccJSON = s
 
 End Function

@@ -51,6 +51,7 @@ Public Function BuildOccurrences(ByVal rsA As DAO.Recordset, _
     Dim clStr As String:  clStr = IIf(IsNull(rsA!color) Or Nz(rsA!color, "") = "", "#4f46e5", CStr(rsA!color))
     Dim tEsc  As String:  tEsc = m_JSON.Escape(Nz(rsA!Title, ""))
     Dim nEsc  As String:  nEsc = m_JSON.Escape(Nz(rsA!Notes, ""))
+    Dim locEsc As String: locEsc = m_JSON.Escape(Nz(rsA!Location, ""))
     Dim calId As String:  calId = Nz(rsA!CalendarID, "")
     Dim aDStr As String:  aDStr = IIf(Nz(rsA!allDay, False), "true", "false")
     Dim rMinsV As Integer: rMinsV = CInt(Nz(rsA!ReminderMinutes, -1))
@@ -74,7 +75,7 @@ Public Function BuildOccurrences(ByVal rsA As DAO.Recordset, _
                     If result <> "" Then result = result & ","
                     result = result & m_JSON.BuildOccJSON(mID, ds1, calId, tEsc, sStr, eStr, _
                         aDStr, clStr, nEsc, rType, rInt, rDOW, rMMode, rMDay, rMWeek, _
-                        rMDOW, rEType, rEDStr, rECnt, rSStr, rMinsV)
+                        rMDOW, rEType, rEDStr, rECnt, rSStr, rMinsV, locEsc)
                     occ = occ + 1
                 End If
             End If
@@ -106,7 +107,7 @@ Public Function BuildOccurrences(ByVal rsA As DAO.Recordset, _
                             If result <> "" Then result = result & ","
                             result = result & m_JSON.BuildOccJSON(mID, ds2, calId, tEsc, sStr, eStr, _
                                 aDStr, clStr, nEsc, rType, rInt, rDOW, rMMode, rMDay, rMWeek, _
-                                rMDOW, rEType, rEDStr, rECnt, rSStr, rMinsV)
+                                rMDOW, rEType, rEDStr, rECnt, rSStr, rMinsV, locEsc)
                             occ = occ + 1
                         End If
                     End If
@@ -137,7 +138,7 @@ Public Function BuildOccurrences(ByVal rsA As DAO.Recordset, _
                         If result <> "" Then result = result & ","
                         result = result & m_JSON.BuildOccJSON(mID, ds3, calId, tEsc, sStr, eStr, _
                             aDStr, clStr, nEsc, rType, rInt, rDOW, rMMode, rMDay, rMWeek, _
-                            rMDOW, rEType, rEDStr, rECnt, rSStr, rMinsV)
+                            rMDOW, rEType, rEDStr, rECnt, rSStr, rMinsV, locEsc)
                         occ = occ + 1
                     End If
                 End If
@@ -157,7 +158,7 @@ Public Function BuildOccurrences(ByVal rsA As DAO.Recordset, _
                     If result <> "" Then result = result & ","
                     result = result & m_JSON.BuildOccJSON(mID, ds4, calId, tEsc, sStr, eStr, _
                         aDStr, clStr, nEsc, rType, rInt, rDOW, rMMode, rMDay, rMWeek, _
-                        rMDOW, rEType, rEDStr, rECnt, rSStr, rMinsV)
+                        rMDOW, rEType, rEDStr, rECnt, rSStr, rMinsV, locEsc)
                     occ = occ + 1
                 End If
             End If
@@ -316,14 +317,14 @@ Private Function ParseRecurFields(ByVal rsA As DAO.Recordset, _
     If IsNull(rsA!StartApptDate) Then Exit Function
     masterDate = rsA!StartApptDate
 
-    rInt   = IIf(IsNull(rsA!RecurInterval) Or Nz(rsA!RecurInterval, 0) < 1, 1, CInt(rsA!RecurInterval))
-    rDOW   = Nz(rsA!RecurDaysOfWeek, "")
+    rInt = IIf(IsNull(rsA!RecurInterval) Or Nz(rsA!RecurInterval, 0) < 1, 1, CInt(rsA!RecurInterval))
+    rDOW = Nz(rsA!RecurDaysOfWeek, "")
     rMMode = Nz(rsA!RecurMonthlyMode, "day")
-    rMDay  = IIf(IsNull(rsA!RecurMonthDay), 1, CInt(rsA!RecurMonthDay))
+    rMDay = IIf(IsNull(rsA!RecurMonthDay), 1, CInt(rsA!RecurMonthDay))
     rMWeek = IIf(IsNull(rsA!RecurMonthWeek), 1, CInt(rsA!RecurMonthWeek))
-    rMDOW  = IIf(IsNull(rsA!RecurMonthDOW), 0, CInt(rsA!RecurMonthDOW))
+    rMDOW = IIf(IsNull(rsA!RecurMonthDOW), 0, CInt(rsA!RecurMonthDOW))
     rEType = Nz(rsA!RecurEndType, "never")
-    rECnt  = IIf(IsNull(rsA!RecurCount) Or Nz(rsA!RecurCount, 0) < 1, 999, CInt(rsA!RecurCount))
+    rECnt = IIf(IsNull(rsA!RecurCount) Or Nz(rsA!RecurCount, 0) < 1, 999, CInt(rsA!RecurCount))
     rExcep = Nz(rsA!RecurExceptions, "")
 
     If rEType = "date" And Not IsNull(rsA!RecurEndDate) Then

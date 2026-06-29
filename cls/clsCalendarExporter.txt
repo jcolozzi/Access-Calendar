@@ -1,0 +1,282 @@
+' =============================================================================
+' clsCalendarExporter
+' Orchestrator / Adapter between the JS calendar commands and Outlook.
+' It understands the calendar's JSON command format, knows how to turn an
+' event into Outlook calendar entries, and how to decode the base64 .ics
+' payload built in the browser, write it to disk, and attach it to a mail.
+'
+' Collaborators (injected via Init):
+'   clsJSONHelper      -  ExtractValue (read fields from the JSON command)
+'   clsDateHelper      -  ISOToDate / HMToTime (parse dates & times)
+'   clsOutlookService  -  the pure Outlook COM wrapper
+'
+' Pattern: this is the high-level use-case object. clsCommandProcessor calls
+' AddAppointmentToOutlook / ExportIcs and then surfaces LastMessage / LastKind
+' back to the UI as a toast notification.
+' =============================================================================
+Option Compare Database
+Option Explicit
+
+' ADODB.Stream save mode
+Private Const adSaveCreateOverWrite As Long = 2
+' ADODB.Stream binary type
+Private Const adTypeBinary          As Long = 1
+
+Private m_JSON     As clsJSONHelper
+Private m_Date     As clsDateHelper
+Private m_Outlook  As clsOutlookService
+Private m_LastMessage As String
+Private m_LastKind    As String      ' "success" | "error" | "info"
+
+' -----------------------------------------------------------------------------
+' Init  -  inject dependencies (call once after New)
+' -----------------------------------------------------------------------------
+Public Sub Init(jh As clsJSONHelper, _
+                dh As clsDateHelper, _
+                ol As clsOutlookService)
+    Set m_JSON = jh
+    Set m_Date = dh
+    Set m_Outlook = ol
+    m_LastMessage = ""
+    m_LastKind = "info"
+End Sub
+
+' -----------------------------------------------------------------------------
+' LastMessage / LastKind  -  result of the most recent operation, for the UI
+' -----------------------------------------------------------------------------
+Public Property Get LastMessage() As String
+    LastMessage = m_LastMessage
+End Property
+
+Public Property Get LastKind() As String
+    LastKind = m_LastKind
+End Property
+
+' =============================================================================
+' AddAppointmentToOutlook  -  parse one event command and push it to Outlook.
+' Routes to a single or recurring appointment based on recurType.
+' Returns True on success; sets LastMessage / LastKind either way.
+' =============================================================================
+Public Function AddAppointmentToOutlook(ByVal jsonStr As String) As Boolean
+    Dim strTitle   As String
+    Dim strNotes   As String
+    Dim strLoc     As String
+    Dim strDate    As String
+    Dim strEndDate As String
+    Dim strStart   As String
+    Dim strEnd     As String
+    Dim blnAllDay  As Boolean
+    Dim dtmStart   As Date
+    Dim dtmEnd     As Date
+    Dim dtmDate    As Date
+    Dim dtmEndDate As Date
+    Dim strRecur   As String
+    Dim blnOk      As Boolean
+
+    m_LastMessage = ""
+    m_LastKind = "info"
+
+    strTitle = m_JSON.ExtractValue(jsonStr, "title")
+    If Len(strTitle) = 0 Then strTitle = "(no title)"
+    strNotes = m_JSON.ExtractValue(jsonStr, "notes")
+    strLoc = m_JSON.ExtractValue(jsonStr, "location")
+    strDate = m_JSON.ExtractValue(jsonStr, "date")
+    strEndDate = m_JSON.ExtractValue(jsonStr, "endDate")
+    strStart = m_JSON.ExtractValue(jsonStr, "start")
+    strEnd = m_JSON.ExtractValue(jsonStr, "end")
+    blnAllDay = (m_JSON.ExtractValue(jsonStr, "allDay") = "true")
+
+    If Len(strDate) = 0 Then
+        m_LastMessage = "No date was provided for the appointment."
+        m_LastKind = "error"
+        AddAppointmentToOutlook = False
+        Exit Function
+    End If
+
+    dtmDate = m_Date.ISOToDate(strDate)
+    If Len(strEndDate) > 0 Then
+        dtmEndDate = m_Date.ISOToDate(strEndDate)
+    Else
+        dtmEndDate = dtmDate
+    End If
+
+    If blnAllDay Then
+        dtmStart = dtmDate
+        dtmEnd = dtmEndDate
+    Else
+        dtmStart = dtmDate + m_Date.HMToTime(strStart)
+        dtmEnd = dtmEndDate + m_Date.HMToTime(strEnd)
+    End If
+
+    strRecur = LCase$(DefStr(m_JSON.ExtractValue(jsonStr, "recurType"), "none"))
+
+    If strRecur = "" Or strRecur = "none" Then
+        blnOk = m_Outlook.AddAppointment(strTitle, strNotes, strLoc, _
+                                         dtmStart, dtmEnd, blnAllDay)
+    Else
+        Dim lngInterval As Long
+        Dim strDOW      As String
+        Dim strMonMode  As String
+        Dim lngMonDay   As Long
+        Dim lngMonWeek  As Long
+        Dim lngMonDOW   As Long
+        Dim strEndType  As String
+        Dim lngCount    As Long
+        Dim dtmUntil    As Date
+        Dim strUntil    As String
+        Dim blnByWeekday As Boolean
+        Dim strByDay    As String
+
+        lngInterval = ToLong(m_JSON.ExtractValue(jsonStr, "recurInterval"), 1)
+        strDOW = m_JSON.ExtractValue(jsonStr, "recurDaysOfWeek")
+        strMonMode = LCase$(DefStr(m_JSON.ExtractValue(jsonStr, "recurMonthlyMode"), "day"))
+        lngMonDay = ToLong(m_JSON.ExtractValue(jsonStr, "recurMonthDay"), Day(dtmDate))
+        lngMonWeek = ToLong(m_JSON.ExtractValue(jsonStr, "recurMonthWeek"), 1)
+        lngMonDOW = ToLong(m_JSON.ExtractValue(jsonStr, "recurMonthDOW"), 0)
+        strEndType = LCase$(DefStr(m_JSON.ExtractValue(jsonStr, "recurEndType"), "never"))
+        lngCount = ToLong(m_JSON.ExtractValue(jsonStr, "recurCount"), 0)
+        strUntil = m_JSON.ExtractValue(jsonStr, "recurEndDate")
+        If Len(strUntil) > 0 Then
+            dtmUntil = m_Date.ISOToDate(strUntil)
+        Else
+            dtmUntil = dtmDate
+        End If
+
+        blnByWeekday = (strMonMode = "weekday")
+
+        If strRecur = "weekly" Then
+            strByDay = strDOW
+        Else
+            strByDay = CStr(lngMonDOW)
+        End If
+
+        blnOk = m_Outlook.AddRecurringAppointment(strTitle, strNotes, strLoc, _
+                    dtmStart, dtmEnd, blnAllDay, strRecur, lngInterval, strByDay, _
+                    lngMonDay, lngMonWeek, blnByWeekday, strEndType, lngCount, dtmUntil)
+    End If
+
+    If blnOk Then
+        m_LastMessage = "Added to your Outlook calendar."
+        m_LastKind = "success"
+        AddAppointmentToOutlook = True
+    Else
+        m_LastMessage = "Outlook error: " & m_Outlook.LastError
+        m_LastKind = "error"
+        AddAppointmentToOutlook = False
+    End If
+End Function
+
+' =============================================================================
+' ExportIcs  -  decode the base64 .ics built in the browser, write it to the
+' exports folder, and open an Outlook mail with it attached.
+' Returns True on success; sets LastMessage / LastKind either way.
+' =============================================================================
+Public Function ExportIcs(ByVal jsonStr As String) As Boolean
+    Dim strFile    As String
+    Dim strSubject As String
+    Dim strB64     As String
+    Dim strDir     As String
+    Dim strPath    As String
+    Dim strBody    As String
+
+    m_LastMessage = ""
+    m_LastKind = "info"
+
+    strFile = m_JSON.ExtractValue(jsonStr, "filename")
+    strSubject = m_JSON.ExtractValue(jsonStr, "subject")
+    strB64 = m_JSON.ExtractValue(jsonStr, "contentB64")
+
+    If Len(strB64) = 0 Then
+        m_LastMessage = "No .ics content was provided."
+        m_LastKind = "error"
+        ExportIcs = False
+        Exit Function
+    End If
+    If Len(strFile) = 0 Then strFile = "event.ics"
+    If Len(strSubject) = 0 Then strSubject = "Calendar event"
+
+    strDir = EnsureExportFolder()
+    If Len(strDir) = 0 Then
+        m_LastMessage = "Could not create the exports folder."
+        m_LastKind = "error"
+        ExportIcs = False
+        Exit Function
+    End If
+    strPath = strDir & "\" & strFile
+
+    If Not WriteBase64ToFile(strB64, strPath) Then
+        m_LastMessage = "Could not write the .ics file."
+        m_LastKind = "error"
+        ExportIcs = False
+        Exit Function
+    End If
+
+    strBody = "Please find the attached calendar event (" & strFile & ")." & vbCrLf & _
+              "Open the attachment to add it to your calendar."
+
+    If m_Outlook.CreateMailWithAttachment("", strSubject, strBody, strPath) Then
+        m_LastMessage = "Outlook email opened with the .ics attachment."
+        m_LastKind = "success"
+        ExportIcs = True
+    Else
+        m_LastMessage = "Saved " & strFile & ", but Outlook could not open: " & _
+                        m_Outlook.LastError
+        m_LastKind = "error"
+        ExportIcs = False
+    End If
+End Function
+
+' =============================================================================
+' PRIVATE HELPERS
+' =============================================================================
+
+' Ensure <project>\exports exists; returns the folder path ("" on failure).
+Private Function EnsureExportFolder() As String
+    Dim strDir As String
+    On Error GoTo Fail
+    strDir = CurrentProject.Path & "\exports"
+    If Len(Dir$(strDir, vbDirectory)) = 0 Then
+        MkDir strDir
+    End If
+    EnsureExportFolder = strDir
+    Exit Function
+Fail:
+    EnsureExportFolder = ""
+End Function
+
+' Decode a base64 string and write the raw bytes to a binary file.
+Private Function WriteBase64ToFile(ByVal strB64 As String, _
+                                   ByVal strPath As String) As Boolean
+    Dim objXml    As Object
+    Dim objNode   As Object
+    Dim objStream As Object
+    On Error GoTo Fail
+    Set objXml = CreateObject("MSXML2.DOMDocument.6.0")
+    Set objNode = objXml.createElement("b64")
+    objNode.DataType = "bin.base64"
+    objNode.Text = strB64
+
+    Set objStream = CreateObject("ADODB.Stream")
+    objStream.Type = adTypeBinary
+    objStream.Open
+    objStream.Write objNode.nodeTypedValue
+    objStream.SaveToFile strPath, adSaveCreateOverWrite
+    objStream.Close
+
+    WriteBase64ToFile = True
+    Exit Function
+Fail:
+    On Error Resume Next
+    If Not objStream Is Nothing Then objStream.Close
+    WriteBase64ToFile = False
+End Function
+
+' Return s, or dflt when s is empty.
+Private Function DefStr(ByVal s As String, ByVal dflt As String) As String
+    If Len(s) = 0 Then DefStr = dflt Else DefStr = s
+End Function
+
+' Parse s as a Long, or return dflt when not numeric.
+Private Function ToLong(ByVal s As String, ByVal dflt As Long) As Long
+    If IsNumeric(s) Then ToLong = CLng(s) Else ToLong = dflt
+End Function

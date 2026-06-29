@@ -23,6 +23,9 @@ Private m_Appts  As clsAppointmentRepo
 Private m_Cals   As clsCalendarRepo
 Private m_Groups As clsCalendarGroupRepo
 Private m_Theme  As clsThemeManager
+Private m_Exporter As clsCalendarExporter
+Private m_UserMessage As String
+Private m_UserMessageKind As String
 
 ' -----------------------------------------------------------------------------
 ' Init  -  inject all dependencies (call once after New)
@@ -31,12 +34,14 @@ Public Sub Init(jh As clsJSONHelper, _
                 ar As clsAppointmentRepo, _
                 cr As clsCalendarRepo, _
                 gr As clsCalendarGroupRepo, _
-                th As clsThemeManager)
+                th As clsThemeManager, _
+                ex As clsCalendarExporter)
     Set m_JSON = jh
     Set m_Appts = ar
     Set m_Cals = cr
     Set m_Groups = gr
     Set m_Theme = th
+    Set m_Exporter = ex
 End Sub
 
 ' =============================================================================
@@ -47,6 +52,9 @@ End Sub
 Public Function ProcessCommand(ByVal jsonStr As String) As String
     Dim action As String
     action = m_JSON.ExtractValue(jsonStr, "action")
+
+    m_UserMessage = ""
+    m_UserMessageKind = ""
 
     Select Case action
 
@@ -128,8 +136,33 @@ Public Function ProcessCommand(ByVal jsonStr As String) As String
             m_Appts.DeleteSeries jsonStr
             ProcessCommand = m_Cals.ActiveCalendarID
 
+        ' -- Outlook / ICS export (no data reload needed) --------------------
+        Case "addToOutlook"
+            m_Exporter.AddAppointmentToOutlook jsonStr
+            m_UserMessage = m_Exporter.LastMessage
+            m_UserMessageKind = m_Exporter.LastKind
+            ProcessCommand = "NORELOAD"
+
+        Case "exportIcs"
+            m_Exporter.ExportIcs jsonStr
+            m_UserMessage = m_Exporter.LastMessage
+            m_UserMessageKind = m_Exporter.LastKind
+            ProcessCommand = "NORELOAD"
+
         Case Else
             ProcessCommand = "NORELOAD"
 
     End Select
 End Function
+
+' -----------------------------------------------------------------------------
+' UserMessage / UserMessageKind  -  result text + kind from the most recent
+' command, surfaced to the UI as a toast (e.g. Outlook / ICS export results).
+' -----------------------------------------------------------------------------
+Public Property Get UserMessage() As String
+    UserMessage = m_UserMessage
+End Property
+
+Public Property Get UserMessageKind() As String
+    UserMessageKind = m_UserMessageKind
+End Property

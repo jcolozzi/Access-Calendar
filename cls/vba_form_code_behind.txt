@@ -16,7 +16,7 @@ Private m_Reminders  As clsReminderManager
 Private m_Processing As Boolean
 Private WithEvents mBroker As clsPubSubBroker
 
-Private Const CALENDAR_NAME As String = "calendarv27.html"
+Private Const CALENDAR_NAME As String = "calendar.html"
 
 ' =============================================================================
 ' Form events
@@ -47,17 +47,21 @@ Private Sub Form_Load()
     Set m_Bridge = New clsJSBridge
     m_Bridge.Init Me.WebBrowser0, jh, re, cr, th
 
-    ' -- Phase 6: command processor -------------------------------------------
-    Set m_CmdProc = New clsCommandProcessor
-    m_CmdProc.Init jh, ar, cr, gr, th
+    ' -- Phase 6: Outlook + ICS export service --------------------------------
+    Dim ol As New clsOutlookService
+    Dim ex As New clsCalendarExporter
+    ex.Init jh, dh, ol
 
-    ' -- Phase 7: pub/sub broker (cross-session sync) -------------------------
+    ' -- Phase 7: command processor -------------------------------------------
+    Set m_CmdProc = New clsCommandProcessor
+    m_CmdProc.Init jh, ar, cr, gr, th, ex
+
+    ' -- Phase 8: pub/sub broker (cross-session sync) -------------------------
     Set mBroker = New clsPubSubBroker
     DoCmd.OpenForm "frmObserver", , , , , acHidden
     Forms!frmObserver.SetBroker mBroker
     PurgeChangeLog 7
 
-    ' -- Navigate to calendar HTML --------------------------------------------
     Me.WebBrowser0.Navigate "https://msaccess/" & CurrentProject.Path & "\" & CALENDAR_NAME
     Me.TimerInterval = 300
 End Sub
@@ -68,12 +72,16 @@ Private Sub WebBrowser0_DocumentComplete(URL As Variant)
         m_Bridge.SendDataToCalendar
         Exit Sub
     End If
+    
+DCErr_Exit:
     Exit Sub
+    
 DCErr:
     Debug.Print "DocumentComplete/SendData error " & Err.Number & ": " & Err.Description
     m_Bridge.ExecuteJS _
         "setStatus('error','Load error " & Err.Number & ": " & _
         Replace(Err.Description, "'", "") & "');"
+    Resume DCErr_Exit
 End Sub
 
 Private Sub Form_Timer()
@@ -98,6 +106,15 @@ Private Sub Form_Timer()
     If restoreCalId <> "NORELOAD" Then
         DoEvents
         m_Bridge.SendDataToCalendar restoreCalId
+    Else
+        ' No reload needed; surface any Outlook/ICS message as a toast.
+        ' (Outlook/ICS commands always return NORELOAD, so this ExecuteJS is
+        '  never issued in the same tick as SendDataToCalendar.)
+        Dim umsg As String
+        umsg = m_CmdProc.UserMessage
+        If umsg <> "" Then
+            m_Bridge.ExecuteJS "showToast(""" & JsSafe(umsg) & """, """ & m_CmdProc.UserMessageKind & """);"
+        End If
     End If
 
 ExitHere:
@@ -117,6 +134,8 @@ Public Sub RefreshCalendar()
     m_Bridge.SendDataToCalendar
 End Sub
 
+
+
 ' =============================================================================
 ' PubSub event handlers  (cross-session sync via frmObserver)
 ' =============================================================================
@@ -130,8 +149,7 @@ Private Sub mBroker_CalendarsChanged(ByVal strPayload As String)
 End Sub
 
 Private Sub mBroker_PollingError(ByVal strErrDesc As String)
-    m_Bridge.ExecuteJS _
-        "setStatus('error','Sync error: " & Replace(strErrDesc, "'", "") & "');"
+    Debug.Print "PubSub polling error: " & strErrDesc
 End Sub
 
 ' =============================================================================
@@ -139,8 +157,21 @@ End Sub
 ' =============================================================================
 
 Private Sub Form_Unload(Cancel As Integer)
+    On Error Resume Next
     If CurrentProject.AllForms("frmObserver").IsLoaded Then
         DoCmd.Close acForm, "frmObserver", acSaveNo
     End If
     Set mBroker = Nothing
 End Sub
+
+
+' -----------------------------------------------------------------------------
+' JsSafe  -  escape a VBA string for embedding inside a double-quoted JS string
+'            literal: backslash first, then the double-quote (order matters).
+' -----------------------------------------------------------------------------
+Private Function JsSafe(ByVal s As String) As String
+    Dim t As String
+    t = Replace(s, "\", "\\")
+    t = Replace(t, Chr$(34), "\" & Chr$(34))
+    JsSafe = t
+End Function

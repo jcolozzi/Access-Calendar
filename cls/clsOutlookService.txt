@@ -1,0 +1,345 @@
+' =============================================================================
+' clsOutlookService
+' Pure Outlook COM wrapper (late-bound). Knows nothing about JSON or the
+' calendar database -- it only speaks "Outlook". Responsibilities:
+'   - get or start an Outlook.Application instance
+'   - add single / recurring appointments to the default calendar
+'   - open a mail item with a file attachment (for .ics export)
+'
+' Design: this is the low-level Adapter. The orchestration (parsing JSON,
+' writing files, base64 decode) lives in clsCalendarExporter, which calls
+' this class. Keeping Outlook knowledge isolated here means the rest of the
+' app never references the Outlook object model.
+' =============================================================================
+Option Compare Database
+Option Explicit
+
+' --- Outlook item types (OlItemType) ----------------------------------------
+Private Const olMailItem        As Long = 0
+Private Const olAppointmentItem As Long = 1
+
+' --- Recurrence pattern types (OlRecurrenceType) ----------------------------
+Private Const olRecursDaily    As Long = 0
+Private Const olRecursWeekly   As Long = 1
+Private Const olRecursMonthly  As Long = 2
+Private Const olRecursMonthNth As Long = 3
+Private Const olRecursYearly   As Long = 5
+Private Const olRecursYearNth  As Long = 6
+
+' --- Day-of-week bitmask (OlDaysOfWeek) -------------------------------------
+Private Const olSunday    As Long = 1
+Private Const olMonday    As Long = 2
+Private Const olTuesday   As Long = 4
+Private Const olWednesday As Long = 8
+Private Const olThursday  As Long = 16
+Private Const olFriday    As Long = 32
+Private Const olSaturday  As Long = 64
+
+' --- adSaveCreateOverWrite for completeness (unused here) --------------------
+Private m_LastError As String
+
+' -----------------------------------------------------------------------------
+' LastError  -  last failure message ("" when the previous call succeeded)
+' -----------------------------------------------------------------------------
+Public Property Get LastError() As String
+    LastError = m_LastError
+End Property
+
+' =============================================================================
+' GetOutlookApp  -  attach to a running Outlook, or start a new instance.
+' =============================================================================
+Public Function GetOutlookApp() As Object
+    Dim objApp As Object
+    On Error Resume Next
+    Set objApp = GetObject(, "Outlook.Application")
+    On Error GoTo 0
+    If objApp Is Nothing Then
+        Set objApp = CreateObject("Outlook.Application")
+    End If
+    Set GetOutlookApp = objApp
+End Function
+
+' =============================================================================
+' AddAppointment  -  create and save a single (non-recurring) appointment
+' in the user's default calendar.
+' =============================================================================
+Public Function AddAppointment(ByVal strSubject As String, _
+                               ByVal strBody As String, _
+                               ByVal strLocation As String, _
+                               ByVal dtmStart As Date, _
+                               ByVal dtmEnd As Date, _
+                               ByVal blnAllDay As Boolean) As Boolean
+    Dim objAppt As Object
+    m_LastError = ""
+    On Error GoTo Fail
+    Set objAppt = BuildAppointment(strSubject, strBody, strLocation, _
+                                   dtmStart, dtmEnd, blnAllDay)
+    objAppt.Save
+    AddAppointment = True
+    Exit Function
+Fail:
+    m_LastError = "Outlook error " & Err.Number & ": " & Err.Description
+    AddAppointment = False
+End Function
+
+' =============================================================================
+' AddRecurringAppointment  -  create and save a recurring appointment.
+'
+'   strFreq      "daily" | "weekly" | "monthly" | "yearly"
+'   lngInterval  repeat every N units (>= 1)
+'   strByDay     comma list of weekday numbers 0..6 (Sun..Sat); used for
+'                weekly, and as a single value for nth-weekday monthly/yearly
+'   lngMonthDay  day of month 1..31 (absolute monthly/yearly)
+'   lngSetPos    nth instance 1..4, or -1 for "last" (nth-weekday mode)
+'   blnByWeekday True => nth-weekday mode, False => absolute day-of-month
+'   strEndType   "never" | "count" | "date"
+'   lngCount     occurrence count when strEndType = "count"
+'   dtmUntil     last date when strEndType = "date"
+' =============================================================================
+Public Function AddRecurringAppointment(ByVal strSubject As String, _
+                                        ByVal strBody As String, _
+                                        ByVal strLocation As String, _
+                                        ByVal dtmStart As Date, _
+                                        ByVal dtmEnd As Date, _
+                                        ByVal blnAllDay As Boolean, _
+                                        ByVal strFreq As String, _
+                                        ByVal lngInterval As Long, _
+                                        ByVal strByDay As String, _
+                                        ByVal lngMonthDay As Long, _
+                                        ByVal lngSetPos As Long, _
+                                        ByVal blnByWeekday As Boolean, _
+                                        ByVal strEndType As String, _
+                                        ByVal lngCount As Long, _
+                                        ByVal dtmUntil As Date) As Boolean
+    Dim objAppt As Object
+    Dim objPat  As Object
+    m_LastError = ""
+    On Error GoTo Fail
+
+    Set objAppt = BuildAppointment(strSubject, strBody, strLocation, _
+                                   dtmStart, dtmEnd, blnAllDay)
+
+    ' Start / End must already be set (done in BuildAppointment) BEFORE
+    ' GetRecurrencePattern is called, or Outlook ignores them.
+    Set objPat = objAppt.GetRecurrencePattern()
+    ApplyRecurrence objPat, strFreq, lngInterval, strByDay, lngMonthDay, _
+                    lngSetPos, blnByWeekday, dtmStart
+
+    ' Exactly one end rule may be set.
+    Select Case LCase$(strEndType)
+        Case "count"
+            If lngCount > 0 Then objPat.Occurrences = lngCount Else objPat.NoEndDate = True
+        Case "date"
+            objPat.PatternEndDate = DateValue(dtmUntil)
+        Case Else
+            objPat.NoEndDate = True
+    End Select
+
+    objAppt.Save
+    AddRecurringAppointment = True
+    Exit Function
+Fail:
+    m_LastError = "Outlook recurrence error " & Err.Number & ": " & Err.Description
+    AddRecurringAppointment = False
+End Function
+
+' =============================================================================
+' CreateMailWithAttachment  -  open (Display, do NOT auto-send) a new mail
+' item with an optional file attachment. The user clicks Send themselves.
+' =============================================================================
+Public Function CreateMailWithAttachment(ByVal strTo As String, _
+                                         ByVal strSubject As String, _
+                                         ByVal strBody As String, _
+                                         ByVal strAttachPath As String) As Boolean
+    Dim objApp  As Object
+    Dim objMail As Object
+    m_LastError = ""
+    On Error GoTo Fail
+    Set objApp = GetOutlookApp()
+    Set objMail = objApp.CreateItem(olMailItem)
+    objMail.Subject = strSubject
+    objMail.Body = strBody
+    If Len(strTo) > 0 Then objMail.To = strTo
+    If Len(strAttachPath) > 0 Then
+        If Len(Dir$(strAttachPath)) > 0 Then objMail.Attachments.Add strAttachPath
+    End If
+    objMail.Display
+    CreateMailWithAttachment = True
+    Exit Function
+Fail:
+    m_LastError = "Outlook mail error " & Err.Number & ": " & Err.Description
+    CreateMailWithAttachment = False
+End Function
+
+' =============================================================================
+' PRIVATE HELPERS
+' =============================================================================
+
+' Build (but do not save) an AppointmentItem with the core fields populated.
+Private Function BuildAppointment(ByVal strSubject As String, _
+                                  ByVal strBody As String, _
+                                  ByVal strLocation As String, _
+                                  ByVal dtmStart As Date, _
+                                  ByVal dtmEnd As Date, _
+                                  ByVal blnAllDay As Boolean) As Object
+    Dim objApp  As Object
+    Dim objAppt As Object
+    Set objApp = GetOutlookApp()
+    Set objAppt = objApp.CreateItem(olAppointmentItem)
+
+    objAppt.Subject = strSubject
+    objAppt.Body = strBody
+    objAppt.Location = strLocation
+
+    If blnAllDay Then
+        objAppt.AllDayEvent = True
+        objAppt.Start = DateValue(dtmStart)
+        ' For an all-day Outlook appointment, End is the day AFTER the last day.
+        If DateValue(dtmEnd) <= DateValue(dtmStart) Then
+            objAppt.End = DateValue(dtmStart) + 1
+        Else
+            objAppt.End = DateValue(dtmEnd) + 1
+        End If
+    Else
+        objAppt.Start = dtmStart
+        If dtmEnd <= dtmStart Then
+            objAppt.End = DateAdd("n", 30, dtmStart)
+        Else
+            objAppt.End = dtmEnd
+        End If
+    End If
+
+    Set BuildAppointment = objAppt
+End Function
+
+' Configure a RecurrencePattern from the calendar recurrence model.
+Private Sub ApplyRecurrence(ByRef objPat As Object, _
+                            ByVal strFreq As String, _
+                            ByVal lngInterval As Long, _
+                            ByVal strByDay As String, _
+                            ByVal lngMonthDay As Long, _
+                            ByVal lngSetPos As Long, _
+                            ByVal blnByWeekday As Boolean, _
+                            ByVal dtmStart As Date)
+    Dim lngEvery As Long
+    Dim lngMask  As Long
+    lngEvery = lngInterval
+    If lngEvery < 1 Then lngEvery = 1
+
+    Select Case LCase$(strFreq)
+
+        Case "daily"
+            objPat.RecurrenceType = olRecursDaily
+            objPat.Interval = lngEvery
+
+        Case "weekly"
+            objPat.RecurrenceType = olRecursWeekly
+            objPat.Interval = lngEvery
+            lngMask = DayMaskFromList(strByDay)
+            If lngMask = 0 Then lngMask = DayMaskFromDate(dtmStart)
+            objPat.DayOfWeekMask = lngMask
+
+        Case "monthly"
+            If blnByWeekday Then
+                objPat.RecurrenceType = olRecursMonthNth
+                objPat.Interval = lngEvery
+                objPat.DayOfWeekMask = MaskOrStartDate(strByDay, dtmStart)
+                objPat.Instance = NthFromSetPos(lngSetPos)
+            Else
+                objPat.RecurrenceType = olRecursMonthly
+                objPat.Interval = lngEvery
+                objPat.DayOfMonth = MonthDayOrStart(lngMonthDay, dtmStart)
+            End If
+
+        Case "yearly"
+            ' Outlook yearly patterns use a month interval that is a multiple of 12.
+            If blnByWeekday Then
+                objPat.RecurrenceType = olRecursYearNth
+                objPat.Interval = 12 * lngEvery
+                objPat.DayOfWeekMask = MaskOrStartDate(strByDay, dtmStart)
+                objPat.Instance = NthFromSetPos(lngSetPos)
+                objPat.MonthOfYear = Month(dtmStart)
+            Else
+                objPat.RecurrenceType = olRecursYearly
+                objPat.Interval = 12 * lngEvery
+                objPat.DayOfMonth = MonthDayOrStart(lngMonthDay, dtmStart)
+                objPat.MonthOfYear = Month(dtmStart)
+            End If
+
+        Case Else
+            objPat.RecurrenceType = olRecursDaily
+            objPat.Interval = lngEvery
+
+    End Select
+End Sub
+
+' Map calendar set-position (-1 = last, 1..4) to Outlook Instance (5 = last).
+Private Function NthFromSetPos(ByVal lngSetPos As Long) As Long
+    If lngSetPos = -1 Then
+        NthFromSetPos = 5
+    ElseIf lngSetPos < 1 Then
+        NthFromSetPos = 1
+    ElseIf lngSetPos > 5 Then
+        NthFromSetPos = 5
+    Else
+        NthFromSetPos = lngSetPos
+    End If
+End Function
+
+' Day of month, falling back to the start date's day when out of range.
+Private Function MonthDayOrStart(ByVal lngMonthDay As Long, ByVal dtmStart As Date) As Long
+    If lngMonthDay >= 1 And lngMonthDay <= 31 Then
+        MonthDayOrStart = lngMonthDay
+    Else
+        MonthDayOrStart = Day(dtmStart)
+    End If
+End Function
+
+' Weekday mask from a list, falling back to the start date's weekday.
+Private Function MaskOrStartDate(ByVal strList As String, ByVal dtmStart As Date) As Long
+    Dim lngMask As Long
+    lngMask = DayMaskFromList(strList)
+    If lngMask = 0 Then lngMask = DayMaskFromDate(dtmStart)
+    MaskOrStartDate = lngMask
+End Function
+
+' Convert a comma list of weekday numbers (0=Sun..6=Sat) to an Outlook mask.
+Private Function DayMaskFromList(ByVal strList As String) As Long
+    Dim arrParts() As String
+    Dim i          As Long
+    Dim lngMask    As Long
+    Dim strItem    As String
+    If Len(Trim$(strList)) = 0 Then
+        DayMaskFromList = 0
+        Exit Function
+    End If
+    arrParts = Split(strList, ",")
+    For i = LBound(arrParts) To UBound(arrParts)
+        strItem = Trim$(arrParts(i))
+        If IsNumeric(strItem) Then
+            Select Case CLng(strItem)
+                Case 0: lngMask = lngMask Or olSunday
+                Case 1: lngMask = lngMask Or olMonday
+                Case 2: lngMask = lngMask Or olTuesday
+                Case 3: lngMask = lngMask Or olWednesday
+                Case 4: lngMask = lngMask Or olThursday
+                Case 5: lngMask = lngMask Or olFriday
+                Case 6: lngMask = lngMask Or olSaturday
+            End Select
+        End If
+    Next i
+    DayMaskFromList = lngMask
+End Function
+
+' Outlook day mask for the weekday of a given date.
+Private Function DayMaskFromDate(ByVal dtmWhen As Date) As Long
+    Select Case Weekday(dtmWhen, vbSunday)
+        Case 1: DayMaskFromDate = olSunday
+        Case 2: DayMaskFromDate = olMonday
+        Case 3: DayMaskFromDate = olTuesday
+        Case 4: DayMaskFromDate = olWednesday
+        Case 5: DayMaskFromDate = olThursday
+        Case 6: DayMaskFromDate = olFriday
+        Case 7: DayMaskFromDate = olSaturday
+    End Select
+End Function

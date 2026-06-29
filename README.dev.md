@@ -9,7 +9,7 @@ A Microsoft Access calendar app that combines:
 - HTML/CSS/JavaScript for the calendar UI
 - Edge WebView2 (`WebBrowser0`) as the bridge between VBA and the browser UI
 
-The app supports multi-calendar scheduling, recurring events, drag-and-drop editing, calendar grouping, reminders, and theme preferences.
+The app supports multi-calendar scheduling, recurring events, drag-and-drop editing, calendar grouping, reminders, theme preferences, an optional event location, adding events to Outlook, and exporting events as `.ics` files for email.
 
 ## Highlights
 
@@ -23,6 +23,9 @@ The app supports multi-calendar scheduling, recurring events, drag-and-drop edit
 - Drag/drop and resize interactions for timed and all-day events
 - Reminder popups driven by a timer loop in VBA
 - Light/dark theme persistence and customizable accent colors
+- Optional location field on events
+- Add events to the user's Outlook calendar (single or recurring) via late-bound COM
+- Export events to `.ics` and open a pre-filled Outlook email with the file attached
 - Standalone browser mode for UI experimentation (without Access persistence)
 
 ## Architecture
@@ -49,18 +52,27 @@ Access-Calendar/
   Calendar.accdb
   calendar.html
   ARCHITECTURE.md
+  css/
+    calendar.css
+  js/
+    calendar.js
+    calendar.ics.js
+    vendor/
+      ics.js
   bas/
     mod_ChangeLog.bas
   cls/
     clsPubSubBroker.txt
     frmObserver.txt
     clsAppointmentRepo.txt
+    clsCalendarExporter.txt
     clsCalendarGroupRepo.txt
     clsCalendarRepo.txt
     clsCommandProcessor.txt
     clsDateHelper.txt
     clsJSBridge.txt
     clsJSONHelper.txt
+    clsOutlookService.txt
     clsRecurrenceEngine.txt
     clsReminderManager.txt
     clsThemeManager.txt
@@ -82,7 +94,9 @@ Access-Calendar/
 - `clsThemeManager`: theme preference synchronization
 - `clsReminderManager`: reminder checks and popup notifications
 - `clsJSBridge`: WebView2 communication and full-state JSON push
-- `clsCommandProcessor`: command router from JS action to VBA handler
+- `clsCommandProcessor`: command router from JS action to VBA handler (also routes Outlook/ICS commands to the exporter and surfaces their result)
+- `clsCalendarExporter`: orchestrates Outlook add and `.ics` export (parses the command JSON, decodes the base64 `.ics` payload, writes it with `ADODB.Stream`, attaches it to a mail)
+- `clsOutlookService`: late-bound Outlook COM wrapper (single/recurring appointments, mail with attachment); no Outlook reference required
 
 ## Database Model
 
@@ -91,6 +105,7 @@ Primary tables used by the app:
 - `tblAppointments`
   - Includes recurrence fields (`RecurType`, interval, end rules, exceptions)
   - Includes reminder fields (`ReminderMinutes`, `ReminderFired`)
+  - Includes an optional `Location` text field (255)
   - Uses soft-delete (`IsDeleted`)
 - `tblCalendars`
   - Calendar metadata, color, optional work hours, optional `GroupID`
@@ -109,6 +124,7 @@ Actions currently handled by `clsCommandProcessor`:
 - Calendar: `addCalendar`, `editCalendar`, `deleteCalendar`
 - Groups: `addGroup`, `renameGroup`, `deleteGroup`, `moveCalendarToGroup`
 - Appointments: `save`, `move`, `resize`, `rescheduleOccurrence`, `delete`, `deleteOccurrence`, `deleteSeries`
+- Outlook / ICS export: `addToOutlook`, `exportIcs` (both return `NORELOAD`; the result text is shown as a toast via `clsCommandProcessor.UserMessage` / `UserMessageKind`)
 
 ## Quick Start
 
@@ -128,6 +144,9 @@ If you are rebuilding the form/classes from this folder export:
 5. Import `bas/mod_ChangeLog.bas` as a standard module.
 6. Create the `frmObserver` hidden form and import its code-behind from `cls/frmObserver.txt`.
 7. Create the `tblChangeLog` table (ChangeID AutoNumber PK, ChangeType Text, RecordID Long, Action Text, ChangedBy Text, ChangedOn DateTime).
+8. Import `cls/clsOutlookService.txt` and `cls/clsCalendarExporter.txt` as class modules. Outlook is accessed late-bound, so no `Microsoft Outlook xx.x Object Library` reference is required.
+9. Ensure `tblAppointments` has a `Location` text field (255) for event locations.
+10. Confirm the front-end files are present alongside `calendar.html`: `css/calendar.css`, `js/calendar.js`, `js/calendar.ics.js`, and `js/vendor/ics.js`.
 
 ## Important Filename Note
 

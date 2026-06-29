@@ -8,7 +8,7 @@
 
 ### Three-Tier Communication Pattern
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────┐
 │                   HTML/CSS/JavaScript (WebView2)            │
 │          (UI Rendering, User Interactions, State)           │
@@ -19,7 +19,7 @@
      - Executes JS via ExecuteJavascript()
 ┌─────────────────────────────────────────────────────────────┐
 │                  VBA Class Modules (Data & Logic)           │
-│           Access Form + 10 OOP Class Modules                │
+│           Access Form + 12 OOP Class Modules                │
 └─────────────────────────────────────────────────────────────┘
      Pub/Sub Layer (Cross-Session Sync)
      frmObserver (3s timer) → clsPubSubBroker → frmCalendar (WithEvents)
@@ -61,11 +61,16 @@ Private Sub Form_Load()
     Set m_Bridge = New clsJSBridge
     m_Bridge.Init Me.WebBrowser0, jh, re, cr, th
     
-    ' Phase 6: Create command dispatcher
+    ' Phase 6: Create Outlook + ICS export service
+    Dim ol As New clsOutlookService
+    Dim ex As New clsCalendarExporter
+    ex.Init jh, dh, ol
+
+    ' Phase 7: Create command dispatcher (now receives the exporter)
     Set m_CmdProc = New clsCommandProcessor
-    m_CmdProc.Init jh, ar, cr, gr, th
+    m_CmdProc.Init jh, ar, cr, gr, th, ex
     
-    ' Phase 7: Pub/sub broker (cross-session sync)
+    ' Phase 8: Pub/sub broker (cross-session sync)
     Set mBroker = New clsPubSubBroker
     DoCmd.OpenForm "frmObserver", , , , , acHidden
     Forms!frmObserver.SetBroker mBroker
@@ -192,6 +197,14 @@ Private Sub Form_Timer()
     If restoreCalId <> "NORELOAD" Then
         DoEvents
         m_Bridge.SendDataToCalendar restoreCalId
+    Else
+        ' Outlook/ICS commands return NORELOAD; show their result as a toast
+        Dim umsg As String
+        umsg = m_CmdProc.UserMessage
+        If umsg <> "" Then
+            m_Bridge.ExecuteJS "showToast(""" & JsSafe(umsg) & """, """ _
+                & m_CmdProc.UserMessageKind & """);"
+        End If
     End If
     
 ExitHere:
@@ -248,7 +261,7 @@ When multiple Access sessions have `frmCalendar` open simultaneously, any data c
 
 ### Flow
 
-```
+```text
 User A makes change
   → repo calls LogChange(strChangeType, lngRecordId, strAction)
       → tblChangeLog row inserted (ChangeType, RecordID, Action, ChangedBy, ChangedOn)
@@ -523,10 +536,44 @@ Public Function ProcessCommand(ByVal jsonStr As String) As String
                 ProcessCommand = firstId
             End If
             
+        ' -- Outlook / ICS export (no reload; result shown as a toast) -------
+        Case "addToOutlook"
+            m_Exporter.AddAppointmentToOutlook jsonStr
+            m_UserMessage = m_Exporter.LastMessage
+            m_UserMessageKind = m_Exporter.LastKind
+            ProcessCommand = "NORELOAD"
+
+        Case "exportIcs"
+            m_Exporter.ExportIcs jsonStr
+            m_UserMessage = m_Exporter.LastMessage
+            m_UserMessageKind = m_Exporter.LastKind
+            ProcessCommand = "NORELOAD"
+
         ' ... more cases
     End Select
 End Function
 ```
+
+---
+
+### **clsCalendarExporter** — Outlook & ICS Export Orchestrator
+
+Bridges the JS export commands and Outlook. Injected with `clsJSONHelper`, `clsDateHelper`, and `clsOutlookService` via `Init`.
+
+- **`AddAppointmentToOutlook(jsonStr)`**: Parses an event command (title, location, notes, date, times, recurrence) and creates a single or recurring appointment in the user's default Outlook calendar.
+- **`ExportIcs(jsonStr)`**: Decodes the base64 `.ics` payload built in the browser (`js/calendar.ics.js`), writes it to disk via `ADODB.Stream`, and opens a new Outlook mail with the file attached.
+- **`LastMessage` / `LastKind`** properties: result text and kind (`"success"`, `"error"`, `"info"`) surfaced to the UI as a toast.
+
+---
+
+### **clsOutlookService** — Outlook COM Wrapper (late-bound)
+
+Pure Outlook adapter — knows nothing about JSON or the database. Late-bound (`GetObject` / `CreateObject`), so **no Outlook reference is required**.
+
+- **`GetOutlookApp()`**: Attaches to a running Outlook instance or starts a new one.
+- **`AddAppointment(subject, body, location, start, end, allDay)`**: Creates and saves a single appointment.
+- **`AddRecurringAppointment(...)`**: Creates and saves a recurring appointment (daily/weekly/monthly/yearly with count/date/never end rules).
+- **`LastError`** property: last failure message (`""` on success).
 
 ---
 
@@ -570,6 +617,12 @@ Opened via `DoCmd.OpenForm "frmObserver", , , , , acHidden`. Not visible to the 
 ---
 
 ## 🎨 HTML/CSS/JavaScript Structure
+
+> The front-end is split into separate files: `calendar.html` (markup),
+> `css/calendar.css` (styles), `js/calendar.js` (UI logic), and
+> `js/calendar.ics.js` (ICS export helpers built on the vendored
+> `js/vendor/ics.js` from nwcell/ics.js). `calendar.html` pulls these in via
+> `<link>` and `<script>` tags.
 
 ### **calendar.html Overview**
 

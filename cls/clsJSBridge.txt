@@ -38,7 +38,6 @@ Public Sub Init(wbCtl As Object, _
     Set m_Cals = cr
     Set m_Theme = th
 End Sub
-
 ' =============================================================================
 ' GetPendingCommand  -  polls JS for a queued command, unescapes and returns it.
 ' Returns "" when there is nothing to process.
@@ -57,7 +56,7 @@ Public Function GetPendingCommand() As String
     Dim jsonStr As String: jsonStr = raw
     ' Strip outer quotes and unescape if the value came back wrapped
     If Left$(jsonStr, 1) = """" And Right$(jsonStr, 1) = """" Then
-        jsonStr = Mid$(jsonStr, 2, Len(jsonStr) - 2)
+        jsonStr = mID$(jsonStr, 2, Len(jsonStr) - 2)
         jsonStr = Replace(jsonStr, "\\", "\")
         jsonStr = Replace(jsonStr, "\""", """")
     End If
@@ -117,10 +116,10 @@ Public Sub SendDataToCalendar(Optional ByVal restoreCalendarId As String = "")
         wEndStr = IIf(IsNull(rsC!WorkEndTime), "", Format(rsC!WorkEndTime, "hh:nn"))
 
         Dim gIdStr As String
-        gIdStr = Nz(rsC!GroupID, "")
+        gIdStr = Nz(rsC!groupId, "")
 
         Dim cColorStr As String
-        cColorStr = Nz(rsC!Color, "")
+        cColorStr = Nz(rsC!color, "")
 
         jsonCals = jsonCals & _
             "{""id"":""" & rsC!CalendarID & """," & _
@@ -151,7 +150,7 @@ Public Sub SendDataToCalendar(Optional ByVal restoreCalendarId As String = "")
         If Not gFirst Then jsonGroups = jsonGroups & ","
         gFirst = False
         jsonGroups = jsonGroups & _
-            "{""id"":""" & rsG!GroupID & """," & _
+            "{""id"":""" & rsG!groupId & """," & _
             """name"":""" & m_JSON.Escape(Nz(rsG!GroupName, "")) & """}"
         rsG.MoveNext
     Loop
@@ -162,7 +161,7 @@ Public Sub SendDataToCalendar(Optional ByVal restoreCalendarId As String = "")
     Dim rsA As DAO.Recordset
     Set rsA = db.OpenRecordset( _
         "SELECT AppointmentID, CalendarID, Title, StartApptDate, StartTime, EndTime, " & _
-        "       AllDay, Color, Notes, EndApptDate, " & _
+        "       AllDay, Color, Notes, Location, EndApptDate, " & _
         "       RecurType, RecurInterval, RecurDaysOfWeek, RecurMonthlyMode, " & _
         "       RecurMonthDay, RecurMonthWeek, RecurMonthDOW, " & _
         "       RecurEndType, RecurEndDate, RecurCount, RecurExceptions, " & _
@@ -193,11 +192,11 @@ Public Sub SendDataToCalendar(Optional ByVal restoreCalendarId As String = "")
             Dim aColorStr   As String
             Dim aRemMinsStr As String
 
-            aDateStr    = IIf(IsNull(rsA!StartApptDate), "", Format(rsA!StartApptDate, "yyyy-mm-dd"))
+            aDateStr = IIf(IsNull(rsA!StartApptDate), "", Format(rsA!StartApptDate, "yyyy-mm-dd"))
             aEndDateStr = IIf(IsNull(rsA!EndApptDate), "", Format(rsA!EndApptDate, "yyyy-mm-dd"))
-            aStartStr   = IIf(IsNull(rsA!StartTime), "", Format(rsA!StartTime, "hh:nn"))
-            aEndStr     = IIf(IsNull(rsA!EndTime), "", Format(rsA!EndTime, "hh:nn"))
-            aColorStr   = IIf(IsNull(rsA!color) Or Nz(rsA!color, "") = "", defaultClr, CStr(rsA!color))
+            aStartStr = IIf(IsNull(rsA!StartTime), "", Format(rsA!StartTime, "hh:nn"))
+            aEndStr = IIf(IsNull(rsA!EndTime), "", Format(rsA!EndTime, "hh:nn"))
+            aColorStr = IIf(IsNull(rsA!color) Or Nz(rsA!color, "") = "", defaultClr, CStr(rsA!color))
             aRemMinsStr = CStr(Nz(rsA!ReminderMinutes, -1))
 
             jsonAppts = jsonAppts & "{" & _
@@ -211,6 +210,7 @@ Public Sub SendDataToCalendar(Optional ByVal restoreCalendarId As String = "")
                 """allDay"":" & IIf(Nz(rsA!allDay, False), "true", "false") & "," & _
                 """color"":""" & aColorStr & """," & _
                 """notes"":""" & m_JSON.Escape(Nz(rsA!Notes, "")) & """," & _
+                """location"":""" & m_JSON.Escape(Nz(rsA!Location, "")) & """," & _
                 """reminderMinutes"":" & aRemMinsStr & "," & _
                 """recurType"":""none""" & _
                 "}"
