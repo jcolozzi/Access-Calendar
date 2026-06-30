@@ -136,13 +136,15 @@ Public Function ProcessCommand(ByVal jsonStr As String) As String
             m_Appts.DeleteSeries jsonStr
             ProcessCommand = m_Cals.ActiveCalendarID
 
-        ' -- Outlook / ICS export (no data reload needed) --------------------
+        ' -- Outlook export: persist to tblAppointments first, THEN push -----
         Case "addToOutlook"
+            m_Appts.Save jsonStr
             m_Exporter.AddAppointmentToOutlook jsonStr
             m_UserMessage = m_Exporter.LastMessage
             m_UserMessageKind = m_Exporter.LastKind
-            ProcessCommand = "NORELOAD"
+            ProcessCommand = m_Cals.ActiveCalendarID
 
+        ' -- ICS export (no data reload needed) ------------------------------
         Case "exportIcs"
             m_Exporter.ExportIcs jsonStr
             m_UserMessage = m_Exporter.LastMessage

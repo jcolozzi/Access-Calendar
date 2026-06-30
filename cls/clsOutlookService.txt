@@ -164,6 +164,10 @@ Public Function CreateMailWithAttachment(ByVal strTo As String, _
         If Len(Dir$(strAttachPath)) > 0 Then objMail.Attachments.Add strAttachPath
     End If
     objMail.Display
+    ' Bring the compose window to the foreground; without this it can open
+    ' behind a maximized Access window and appear to do nothing.
+    On Error Resume Next
+    objMail.GetInspector.Activate
     CreateMailWithAttachment = True
     Exit Function
 Fail:

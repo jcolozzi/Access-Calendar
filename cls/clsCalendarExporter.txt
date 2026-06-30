@@ -181,6 +181,7 @@ Public Function ExportIcs(ByVal jsonStr As String) As Boolean
 
     m_LastMessage = ""
     m_LastKind = "info"
+    On Error GoTo EH
 
     strFile = m_JSON.ExtractValue(jsonStr, "filename")
     strSubject = m_JSON.ExtractValue(jsonStr, "subject")
@@ -224,6 +225,12 @@ Public Function ExportIcs(ByVal jsonStr As String) As Boolean
         m_LastKind = "error"
         ExportIcs = False
     End If
+    Exit Function
+
+EH:
+    m_LastMessage = "ICS export error " & Err.Number & ": " & Err.Description
+    m_LastKind = "error"
+    ExportIcs = False
 End Function
 
 ' =============================================================================

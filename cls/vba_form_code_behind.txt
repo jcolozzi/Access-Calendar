@@ -106,15 +106,13 @@ Private Sub Form_Timer()
     If restoreCalId <> "NORELOAD" Then
         DoEvents
         m_Bridge.SendDataToCalendar restoreCalId
-    Else
-        ' No reload needed; surface any Outlook/ICS message as a toast.
-        ' (Outlook/ICS commands always return NORELOAD, so this ExecuteJS is
-        '  never issued in the same tick as SendDataToCalendar.)
-        Dim umsg As String
-        umsg = m_CmdProc.UserMessage
-        If umsg <> "" Then
-            m_Bridge.ExecuteJS "showToast(""" & JsSafe(umsg) & """, """ & m_CmdProc.UserMessageKind & """);"
-        End If
+    End If
+
+    ' Surface any Outlook/ICS result message as a toast (independent of reload).
+    Dim umsg As String
+    umsg = m_CmdProc.UserMessage
+    If umsg <> "" Then
+        m_Bridge.ExecuteJS "showToast(""" & JsSafe(umsg) & """, """ & m_CmdProc.UserMessageKind & """);"
     End If
 
 ExitHere:

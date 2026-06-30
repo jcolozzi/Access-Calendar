@@ -105,7 +105,7 @@ Primary tables used by the app:
 - `tblAppointments`
   - Includes recurrence fields (`RecurType`, interval, end rules, exceptions)
   - Includes reminder fields (`ReminderMinutes`, `ReminderFired`)
-  - Includes an optional `Location` text field (255)
+  - Includes an optional `Location` text field (255), **Allow Zero Length = Yes** (the UI sends `""` for events with no location)
   - Uses soft-delete (`IsDeleted`)
 - `tblCalendars`
   - Calendar metadata, color, optional work hours, optional `GroupID`
@@ -145,7 +145,7 @@ If you are rebuilding the form/classes from this folder export:
 6. Create the `frmObserver` hidden form and import its code-behind from `cls/frmObserver.txt`.
 7. Create the `tblChangeLog` table (ChangeID AutoNumber PK, ChangeType Text, RecordID Long, Action Text, ChangedBy Text, ChangedOn DateTime).
 8. Import `cls/clsOutlookService.txt` and `cls/clsCalendarExporter.txt` as class modules. Outlook is accessed late-bound, so no `Microsoft Outlook xx.x Object Library` reference is required.
-9. Ensure `tblAppointments` has a `Location` text field (255) for event locations.
+9. Ensure `tblAppointments` has a `Location` text field (255) for event locations, with **Allow Zero Length = Yes** (the UI sends an empty string when no location is entered; otherwise `Save` fails with run-time error 3315).
 10. Confirm the front-end files are present alongside `calendar.html`: `css/calendar.css`, `js/calendar.js`, `js/calendar.ics.js`, and `js/vendor/ics.js`.
 
 ## Important Filename Note
