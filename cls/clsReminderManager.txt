@@ -16,6 +16,7 @@ Option Explicit
 
 Private m_RecurEngine         As clsRecurrenceEngine
 Private m_FiredRecurReminders As Collection
+Private Const REMINDER_TIMEOUT_MS As Long = 30000  ' auto-dismiss after 30s if ignored
 
 ' -----------------------------------------------------------------------------
 ' Init  -  inject dependencies and set up session state (call once after New)
@@ -156,9 +157,8 @@ End Function
 ' MsgBox always renders with the stark old Windows style regardless of theme.
 ' A timeout is set so an ignored reminder auto-dismisses (default OK) instead
 ' of blocking Form_Timer's JS command polling indefinitely - see REMINDER_
-' TIMEOUT_MS below and README.dev.md "Reminder Popup Styling".
+' TIMEOUT_MS in the declarations section.
 ' -----------------------------------------------------------------------------
-Private Const REMINDER_TIMEOUT_MS As Long = 30000  ' auto-dismiss after 30s if ignored
 
 Private Sub ShowPopup(ByVal sTitle As String, _
                        ByVal apptDT As Date, _

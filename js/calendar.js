@@ -2630,9 +2630,8 @@ class CalendarRenderer {
         if(ev) openModal('','','',ev);
       });
       el.addEventListener('dragstart', e => {
-        const found = events.find(e2=>String(e2.id)===el.dataset.id);
-        if (found && found.isPending) { e.preventDefault(); return; }
-        dragEv = found;
+        dragEv=events.find(e2=>String(e2.id)===el.dataset.id);
+        if (dragEv && dragEv.isPending) { dragEv = null; e.preventDefault(); return; }
         e.dataTransfer.effectAllowed='move';
       });
       el.addEventListener('dragend', () => { dragEv=null; });
@@ -2748,9 +2747,8 @@ class CalendarRenderer {
         });
         el.addEventListener('dragstart', e => {
           if (resizeEv) { e.preventDefault(); return; }
-          const found = events.find(e2=>String(e2.id)===el.dataset.id);
-          if (found && found.isPending) { e.preventDefault(); return; }
-          dragEv = found;
+          dragEv=events.find(e2=>String(e2.id)===el.dataset.id);
+          if (dragEv && dragEv.isPending) { dragEv = null; e.preventDefault(); return; }
           dragOffset=e.clientY-el.getBoundingClientRect().top;
           e.dataTransfer.effectAllowed='move';
         });
@@ -2814,9 +2812,8 @@ class CalendarRenderer {
           if (found) openModal('', '', '', found);
         });
         el.addEventListener('dragstart', e => {
-          const found = events.find(e2 => String(e2.id) === el.dataset.id);
-          if (found && found.isPending) { e.preventDefault(); return; }
-          dragEv = found;
+          dragEv = events.find(e2 => String(e2.id) === el.dataset.id);
+          if (dragEv && dragEv.isPending) { dragEv = null; e.preventDefault(); return; }
           e.dataTransfer.effectAllowed = 'move';
           requestAnimationFrame(() => el.classList.add('dragging'));
         });
