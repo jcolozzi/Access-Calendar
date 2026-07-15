@@ -25,6 +25,15 @@ Private Const CALENDAR_NAME As String = "calendar.html"
 Private Sub Form_Load()
     DoCmd.Maximize
 
+    ' -- Phase 0: self-heal linked table paths --------------------------------
+    ' Repoints tblAppointments/tblCalendars/tblCalendarGroups/tblChangeLog at
+    ' the calendar backend. Default: data\Calendar_be.accdb next to this
+    ' front-end (the folder cloned/moved together, e.g. from the GitHub demo).
+    ' For a shared backend (network share + a front-end copy per desktop),
+    ' add BackendPath.txt next to this file with the shared path on line 1 -
+    ' see GetConfiguredBackendPath / README.dev.md "Backend Linking".
+    EnsureBackendLinked
+
     ' -- Phase 1: utilities ---------------------------------------------------
     Dim jh As New clsJSONHelper
     Dim dh As New clsDateHelper
@@ -131,6 +140,81 @@ End Sub
 Public Sub RefreshCalendar()
     m_Bridge.SendDataToCalendar
 End Sub
+
+' =============================================================================
+' EnsureBackendLinked  -  repoint the linked tables at the calendar backend so
+' the app is portable across machines/folders without a manual Linked Table
+' Manager step. Idempotent and safe to call every load: it only rewrites a
+' TableDef's Connect string when it does not already match the resolved
+' backend path (see GetConfiguredBackendPath for the default vs. override
+' rules — split deployments with a shared backend MUST use BackendPath.txt,
+' since the default assumes the backend sits next to this front-end copy).
+' =============================================================================
+Public Sub EnsureBackendLinked()
+    Dim strBE As String
+    strBE = GetConfiguredBackendPath()
+
+    If Dir$(strBE) = "" Then
+        MsgBox "Could not find the calendar backend database at:" & vbCrLf & strBE & _
+               vbCrLf & vbCrLf & "Copy data\Calendar_be.accdb next to this file, add/fix " & _
+               "BackendPath.txt next to this file to point at the shared backend, or relink " & _
+               "the tables manually (Database Tools > Linked Table Manager).", _
+               vbExclamation, "Access Calendar"
+        Exit Sub
+    End If
+
+    Dim strConnect As String: strConnect = ";DATABASE=" & strBE
+    Dim arrTables As Variant: arrTables = Array("tblAppointments", "tblCalendars", "tblCalendarGroups", "tblChangeLog")
+    Dim i As Long
+    Dim db As DAO.Database: Set db = CurrentDb
+    Dim tdf As DAO.TableDef
+
+    On Error Resume Next
+    For i = LBound(arrTables) To UBound(arrTables)
+        Set tdf = Nothing
+        Set tdf = db.TableDefs(arrTables(i))
+        If Not tdf Is Nothing Then
+            If tdf.Connect <> strConnect Then
+                tdf.Connect = strConnect
+                tdf.RefreshLink
+            End If
+        End If
+    Next i
+    On Error GoTo 0
+End Sub
+
+' =============================================================================
+' GetConfiguredBackendPath  -  resolve which backend .accdb to link to.
+'
+'   1. If BackendPath.txt exists next to this front-end and its first line is
+'      non-blank, that path wins (trimmed, as-is - UNC or local, e.g.
+'      \\fileserver\share\Calendar\Calendar_be.accdb). Use this for a "shared
+'      backend, front-end copy per desktop" deployment: without it, every
+'      desktop copy would self-heal back to a LOCAL data\Calendar_be.accdb
+'      next to itself instead of the shared one, and users would each see
+'      their own disconnected copy of the data.
+'   2. Otherwise, default to data\Calendar_be.accdb next to this front-end
+'      (the layout used by the single-file GitHub demo).
+' =============================================================================
+Private Function GetConfiguredBackendPath() As String
+    Dim strOverrideFile As String: strOverrideFile = CurrentProject.Path & "\BackendPath.txt"
+    Dim strLine As String
+
+    If Dir$(strOverrideFile) <> "" Then
+        Dim iFile As Integer: iFile = FreeFile
+        Open strOverrideFile For Input As #iFile
+        If Not EOF(iFile) Then Line Input #iFile, strLine
+        Close #iFile
+
+        strLine = Trim$(strLine)
+        If Len(strLine) > 0 Then
+            GetConfiguredBackendPath = strLine
+            Exit Function
+        End If
+    End If
+
+    GetConfiguredBackendPath = CurrentProject.Path & "\data\Calendar_be.accdb"
+End Function
 
 
 

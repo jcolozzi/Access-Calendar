@@ -116,6 +116,22 @@ Primary tables used by the app:
   - ChangeID (AutoNumber PK), ChangeType (Text), RecordID (Long), Action (Text), ChangedBy (Text), ChangedOn (DateTime)
   - Purged automatically after 7 days via `PurgeChangeLog`
 
+## Backend Linking
+
+`Form_Load` calls `EnsureBackendLinked` (Phase 0, before any repo touches `CurrentDb`) to repoint `tblAppointments` / `tblCalendars` / `tblCalendarGroups` / `tblChangeLog` at the backend, using `GetConfiguredBackendPath` to resolve which file that is. This is idempotent — it only rewrites a `TableDef.Connect` when it doesn't already match — so it is safe to run on every load, on every machine.
+
+**Default (no setup needed):** the backend is expected to live at `data\Calendar_be.accdb`, in a folder next to the front-end `Calendar.accdb`. This is the layout used by the GitHub demo and by a single-user setup — clone the repo, or copy the whole folder, and it works with no relinking.
+
+**Override (required for a shared backend):** if you deploy with the backend on a network file share and a separate front-end `.accdb` copy on each user's desktop, the default rule breaks: each desktop's `CurrentProject.Path` is a local folder, so on open, every copy would self-heal its links back to a **local** `data\Calendar_be.accdb` next to itself — instead of the shared one — silently splitting everyone onto their own disconnected copy of the data with no error.
+
+To use a shared backend, create a text file named `BackendPath.txt` next to each front-end copy, containing the full backend path on its first line, for example:
+
+```text
+\\fileserver\share\Calendar\Calendar_be.accdb
+```
+
+When `BackendPath.txt` is present and its first line is non-blank, `EnsureBackendLinked` links to that path instead of the default. Remove or blank out the file to fall back to the default `data\Calendar_be.accdb` behavior. If the resolved path (default or override) can't be found, a message box explains the problem and names the path it looked for, instead of failing later with a confusing "missing table" error.
+
 ## Command Contract (JS -> VBA)
 
 Actions currently handled by `clsCommandProcessor`:
@@ -147,6 +163,7 @@ If you are rebuilding the form/classes from this folder export:
 8. Import `cls/clsOutlookService.txt` and `cls/clsCalendarExporter.txt` as class modules. Outlook is accessed late-bound, so no `Microsoft Outlook xx.x Object Library` reference is required.
 9. Ensure `tblAppointments` has a `Location` text field (255) for event locations, with **Allow Zero Length = Yes** (the UI sends an empty string when no location is entered; otherwise `Save` fails with run-time error 3315).
 10. Confirm the front-end files are present alongside `calendar.html`: `css/calendar.css`, `js/calendar.js`, `js/calendar.ics.js`, and `js/vendor/ics.js`.
+11. Place the backend at `data\Calendar_be.accdb` next to the front-end (default, no relink needed), or add `BackendPath.txt` next to the front-end pointing at a shared backend location — see [Backend Linking](#backend-linking).
 
 ## Important Filename Note
 

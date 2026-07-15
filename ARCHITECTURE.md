@@ -39,6 +39,9 @@
 Private Sub Form_Load()
     DoCmd.Maximize
     
+    ' Phase 0: Self-heal linked table paths (see "Backend Linking" below)
+    EnsureBackendLinked
+    
     ' Phase 1: Create utility classes (pure functions)
     Dim jh As New clsJSONHelper
     Dim dh As New clsDateHelper
@@ -87,6 +90,15 @@ End Sub
 - **Dependency Injection**: Classes receive their dependencies via `Init()`, enabling loose coupling
 - **Singleton Pattern**: Form-level variables (`m_Bridge`, `m_CmdProc`, `m_Reminders`) hold the same instances throughout the session
 - **Timer Polling**: 300ms interval triggers both reminder checks and JS command polling
+
+#### Backend Linking (`EnsureBackendLinked` / `GetConfiguredBackendPath`)
+
+Runs before anything else touches `CurrentDb`, so every repo/manager sees correctly-linked tables. It repoints `tblAppointments` / `tblCalendars` / `tblCalendarGroups` / `tblChangeLog` at a resolved backend path, only rewriting a `TableDef.Connect` when it doesn't already match:
+
+- **Default** (no override present): `<front-end folder>\data\Calendar_be.accdb` — i.e. the backend is expected to travel *with* the front-end copy (the layout used by the GitHub demo, or a single-user setup).
+- **Override**: if `BackendPath.txt` exists next to the front-end with a path on its first line, that path is used instead — required for a **shared backend** deployment (backend on a network share, one front-end copy per user's desktop). Without the override file, every desktop copy's `CurrentProject.Path` is its own local folder, so the self-heal would relink each user back to their own *local* `data\Calendar_be.accdb` instead of the shared one — silently splitting everyone's data.
+
+See [README.dev.md](README.dev.md#backend-linking) for the full explanation and setup steps.
 
 ---
 
