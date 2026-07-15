@@ -97,6 +97,7 @@ Access-Calendar/
 - `clsCommandProcessor`: command router from JS action to VBA handler (also routes Outlook/ICS commands to the exporter and surfaces their result)
 - `clsCalendarExporter`: orchestrates Outlook add and `.ics` export (parses the command JSON, decodes the base64 `.ics` payload, writes it with `ADODB.Stream`, attaches it to a mail)
 - `clsOutlookService`: late-bound Outlook COM wrapper (single/recurring appointments, mail with attachment); no Outlook reference required
+- `modTimedMsgBox`: third-party helper (Colin Riddington / isladogs.co.uk) providing `MsgBoxT`, an Access-365 "new style" message box with an optional auto-dismiss timeout; used by `clsReminderManager` for the appointment reminder popup
 
 ## Database Model
 
@@ -115,6 +116,17 @@ Primary tables used by the app:
 - `tblChangeLog`
   - ChangeID (AutoNumber PK), ChangeType (Text), RecordID (Long), Action (Text), ChangedBy (Text), ChangedOn (DateTime)
   - Purged automatically after 7 days via `PurgeChangeLog`
+
+## Reminder Popup Styling
+
+`clsReminderManager.ShowPopup` uses `MsgBoxT` (from `modTimedMsgBox`) instead of a plain `MsgBox`, so the appointment reminder gets the Access 365 "new style" message box (rounded corners, larger icon) instead of the old flat Windows dialog.
+
+- **Theme**: the new-style box automatically follows the **Office application's own theme** (File > Options > General > Office Theme, including Windows dark mode) - not the calendar's own JS-driven light/dark toggle or its user-selectable Main/Accent colors (`clsThemeManager`). A native Windows message box cannot be recolored to an arbitrary app-chosen hex color; Office-theme-following is the closest available fit. If true custom-hex-color theming of the reminder is ever required, replace it with a small custom Access form styled to match instead of a `MsgBox`-based approach.
+- **Timeout**: `REMINDER_TIMEOUT_MS` (in `clsReminderManager`, default 30000 = 30 s) auto-dismisses the popup with the default button if ignored. This matters beyond convenience: `Form_Timer` calls `m_Reminders.CheckAll` (which can show this popup) *before* `m_Bridge.GetPendingCommand()` in the same procedure, so while any reminder popup is on screen, JS command polling (saves, moves, etc.) is paused. An unbounded `MsgBox` could block user actions indefinitely if a reminder was ignored; the timeout caps how long that window stays open.
+
+## Data Integrity Safeguards
+
+`clsAppointmentRepo.Save` resolves the incoming JSON `id` field to decide insert-vs-update: blank or `"0"` means "new appointment" (`AddNew`); a numeric value means "update that AppointmentID". A **non-blank, non-numeric** id (e.g. a stale client-side placeholder id) is rejected (`Save` returns `""` without writing) rather than silently falling back to `AddNew` - otherwise a desynced front-end id would create a silent duplicate row with no error. This guards against the front-end's optimistic-UI placeholders (`js/calendar.js`, ids like `tmp1721048123`) ever being resubmitted as if they were real: `AppointmentModal.open()` already refuses to (re)open a pending placeholder for editing/dragging, but the VBA-side check is the last line of defense against any other path producing a bad id.
 
 ## Backend Linking
 

@@ -59,10 +59,21 @@ Public Function Save(ByVal jsonStr As String) As String
     Dim rRangeStart As String: rRangeStart = Nz(m_JSON.ExtractValue(jsonStr, "recurRangeStart"), dIso)
     If rRangeStart = "" Then rRangeStart = dIso
 
-    ' Numeric ID — for recurring virtual events, id may come in as a master numeric id
+    ' Numeric ID — for recurring virtual events, id may come in as a master numeric id.
+    ' A BLANK/zero id means "genuinely new appointment" (AddNew below). A NON-BLANK but
+    ' NON-NUMERIC id (e.g. a stale client-side optimistic placeholder like "tmp1721048123")
+    ' means the browser sent a desynced/stale reference - NOT a legitimate new appointment.
+    ' Treating that as id=0 would silently create a duplicate row with no error, which is
+    ' exactly the bug this guards against: bail out without saving instead.
     Dim numId As Long
     Dim rawId As String: rawId = Trim(idText)
-    If IsNumeric(rawId) Then numId = CLng(rawId) Else numId = 0
+    If rawId = "" Or rawId = "0" Then
+        numId = 0
+    ElseIf IsNumeric(rawId) Then
+        numId = CLng(rawId)
+    Else
+        Save = "": Exit Function
+    End If
 
     If numId = 0 Then
         Set rs = db.OpenRecordset("tblAppointments", dbOpenDynaset)

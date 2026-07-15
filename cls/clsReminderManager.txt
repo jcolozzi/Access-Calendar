@@ -151,7 +151,15 @@ End Function
 
 ' -----------------------------------------------------------------------------
 ' ShowPopup  -  displays a formatted reminder message box
+' Uses MsgBoxT (modTimedMsgBox.bas) for the Access 365 "new style" message box,
+' which automatically follows the user's Office theme (light/dark) - a plain
+' MsgBox always renders with the stark old Windows style regardless of theme.
+' A timeout is set so an ignored reminder auto-dismisses (default OK) instead
+' of blocking Form_Timer's JS command polling indefinitely - see REMINDER_
+' TIMEOUT_MS below and README.dev.md "Reminder Popup Styling".
 ' -----------------------------------------------------------------------------
+Private Const REMINDER_TIMEOUT_MS As Long = 30000  ' auto-dismiss after 30s if ignored
+
 Private Sub ShowPopup(ByVal sTitle As String, _
                        ByVal apptDT As Date, _
                        ByVal remMins As Integer)
@@ -176,9 +184,9 @@ Private Sub ShowPopup(ByVal sTitle As String, _
             leadStr = "Starts in " & days & " day" & IIf(days = 1, "", "s") & "."
     End Select
 
-    msg = sTitle & vbCrLf & vbCrLf & _
-          "When:   " & dateStr & "  " & timeStr & vbCrLf & vbCrLf & _
-          leadStr
+    ' '@' splits the new-style message into 2 blocks: a bold title line, then details.
+    msg = sTitle & "@" & _
+          "When:   " & dateStr & "  " & timeStr & vbCrLf & leadStr
 
-    MsgBox msg, vbInformation + vbSystemModal, "  Calendar Reminder"
+    MsgBoxT msg, vbOKOnly + vbInformation, "  Calendar Reminder", "", 0, REMINDER_TIMEOUT_MS
 End Sub

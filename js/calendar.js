@@ -2141,6 +2141,14 @@ class AppointmentModal {
   }
 
   open(dateStr, startStr = '09:00', endStr = '10:00', ev = null) {
+    // Refuse to edit a still-unsaved optimistic placeholder (tmp id): the real
+    // record hasn't come back from VBA yet, so its id isn't stable. Editing/
+    // resaving it would send a non-numeric id, which VBA would otherwise turn
+    // into a silent duplicate (AddNew) instead of an update.
+    if (ev && ev.isPending) {
+      showToast('Still saving\u2026 try again in a moment.', 'info');
+      return;
+    }
     editingId        = ev ? (ev.recurMasterId != null ? ev.recurMasterId : ev.id) : null;
     editingRecurDate = ev && ev.isRecurring ? ev.date : null;
     editingRecurEv   = (ev && ev.isRecurring) ? ev : null;
@@ -2173,6 +2181,9 @@ class AppointmentModal {
 
   close() {
     overlay.style.display = 'none';
+    editingId        = null;
+    editingRecurDate = null;
+    editingRecurEv   = null;
   }
 
   getFormData() {
@@ -2313,14 +2324,15 @@ class AppointmentModal {
         if (!hadRecurrence || fd.recurType === 'none')
           events.push({id:`tmp${Date.now()}`, title: fd.title, date: fd.date,
             endDate: fd.endDate, start: fd.start, end: fd.end, notes: fd.notes,
-            location: fd.location, allDay: fd.allDay, color: fd.color, calendarId: fd.calendarId, recurType:'none'});
+            location: fd.location, allDay: fd.allDay, color: fd.color, calendarId: fd.calendarId,
+            recurType:'none', isPending: true});
         // For recurring→still-recurring: no placeholder; VBA must rebuild all occurrences
       } else {
         events.push({id:`tmp${Date.now()}`, title: fd.title, date: fd.date,
           endDate: fd.endDate, start: fd.start, end: fd.end, notes: fd.notes,
           location: fd.location, allDay: fd.allDay, color: fd.color, calendarId: fd.calendarId,
           recurType: fd.recurType, recurInterval: fd.recurInterval,
-          recurDaysOfWeek: fd.recurDaysOfWeek});
+          recurDaysOfWeek: fd.recurDaysOfWeek, isPending: true});
       }
     }
     overlay.style.display = 'none';
@@ -2618,7 +2630,9 @@ class CalendarRenderer {
         if(ev) openModal('','','',ev);
       });
       el.addEventListener('dragstart', e => {
-        dragEv=events.find(e2=>String(e2.id)===el.dataset.id);
+        const found = events.find(e2=>String(e2.id)===el.dataset.id);
+        if (found && found.isPending) { e.preventDefault(); return; }
+        dragEv = found;
         e.dataTransfer.effectAllowed='move';
       });
       el.addEventListener('dragend', () => { dragEv=null; });
@@ -2734,7 +2748,9 @@ class CalendarRenderer {
         });
         el.addEventListener('dragstart', e => {
           if (resizeEv) { e.preventDefault(); return; }
-          dragEv=events.find(e2=>String(e2.id)===el.dataset.id);
+          const found = events.find(e2=>String(e2.id)===el.dataset.id);
+          if (found && found.isPending) { e.preventDefault(); return; }
+          dragEv = found;
           dragOffset=e.clientY-el.getBoundingClientRect().top;
           e.dataTransfer.effectAllowed='move';
         });
@@ -2753,6 +2769,7 @@ class CalendarRenderer {
           e.preventDefault();
           const found = events.find(e2 => String(e2.id) === el.dataset.id);
           if (!found) return;
+          if (found.isPending) return;
           resizeEv = found;
           resizeEdge = edge;
           resizeEl = el;
@@ -2797,7 +2814,9 @@ class CalendarRenderer {
           if (found) openModal('', '', '', found);
         });
         el.addEventListener('dragstart', e => {
-          dragEv = events.find(e2 => String(e2.id) === el.dataset.id);
+          const found = events.find(e2 => String(e2.id) === el.dataset.id);
+          if (found && found.isPending) { e.preventDefault(); return; }
+          dragEv = found;
           e.dataTransfer.effectAllowed = 'move';
           requestAnimationFrame(() => el.classList.add('dragging'));
         });
