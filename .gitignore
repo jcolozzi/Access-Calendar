@@ -1,3 +1,7 @@
 *.accdb
 *.laccdb
 Thumbs.db
+
+# Demo database: intentionally tracked so users have example data to try.
+!Calendar.accdb
+!data/Calendar_be.accdb
