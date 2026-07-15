@@ -14,6 +14,7 @@ Private m_Bridge     As clsJSBridge
 Private m_CmdProc    As clsCommandProcessor
 Private m_Reminders  As clsReminderManager
 Private m_Processing As Boolean
+Private m_CmdQueue   As Collection      ' JS commands captured by WebBrowser0_BeforeNavigate
 Private WithEvents mBroker As clsPubSubBroker
 
 Private Const CALENDAR_NAME As String = "calendar.html"
@@ -24,6 +25,7 @@ Private Const CALENDAR_NAME As String = "calendar.html"
 
 Private Sub Form_Load()
     DoCmd.Maximize
+    Set m_CmdQueue = New Collection
 
     ' -- Phase 0: self-heal linked table paths --------------------------------
     ' Repoints tblAppointments/tblCalendars/tblCalendarGroups/tblChangeLog at
@@ -93,6 +95,41 @@ DCErr:
     Resume DCErr_Exit
 End Sub
 
+' =============================================================================
+' WebBrowser0_BeforeNavigate  -  JS -> VBA command channel.
+'
+' The Access EdgeBrowserControl (WebView2) exposes NO WebMessageReceived event,
+' and RetrieveJavascriptValue (the previous polling channel) is broken by
+' WebView2 Runtime 149+. So calendar.js pushes each command by navigating to
+'   https://msaccess/__cmd__?data=<url-encoded JSON>&t=<ms>
+' We intercept it here, cancel the navigation (so the page never actually
+' leaves), url-decode the payload, and queue it for Form_Timer to process -
+' keeping heavy work out of the navigation event itself.
+' =============================================================================
+Private Sub WebBrowser0_BeforeNavigate(Cancel As Integer, URL As String)
+    On Error GoTo EH
+    Const CMD_MARK As String = "/__cmd__?data="
+    Dim p As Long
+    p = InStr(1, URL, CMD_MARK, vbTextCompare)
+    If p = 0 Then Exit Sub                       ' ordinary navigation (initial load, links)
+
+    Cancel = True                                ' never actually navigate to the sentinel
+
+    Dim payload As String
+    payload = Mid$(URL, p + Len(CMD_MARK))
+    Dim amp As Long: amp = InStr(payload, "&")   ' drop the &t= cache-buster
+    If amp > 0 Then payload = Left$(payload, amp - 1)
+
+    Dim cmd As String: cmd = UrlDecode(payload)
+    If Len(cmd) > 0 Then
+        If m_CmdQueue Is Nothing Then Set m_CmdQueue = New Collection
+        m_CmdQueue.Add cmd
+    End If
+    Exit Sub
+EH:
+    Debug.Print "BeforeNavigate error " & Err.Number & ": " & Err.Description
+End Sub
+
 Private Sub Form_Timer()
     If m_Processing Then Exit Sub
     m_Processing = True
@@ -103,9 +140,9 @@ Private Sub Form_Timer()
     m_Reminders.CheckAll
     On Error GoTo EH
 
-    ' Poll for a pending JS command
+    ' Drain the next JS command captured by WebBrowser0_BeforeNavigate
     Dim cmd As String
-    cmd = m_Bridge.GetPendingCommand()
+    cmd = DequeueCommand()
     If cmd = "" Then GoTo ExitHere
 
     ' Dispatch and reload if needed
@@ -256,4 +293,70 @@ Private Function JsSafe(ByVal s As String) As String
     t = Replace(s, "\", "\\")
     t = Replace(t, Chr$(34), "\" & Chr$(34))
     JsSafe = t
+End Function
+
+' -----------------------------------------------------------------------------
+' DequeueCommand  -  pop the oldest JS command captured by BeforeNavigate.
+'                    Returns "" when the queue is empty.
+' -----------------------------------------------------------------------------
+Private Function DequeueCommand() As String
+    On Error Resume Next
+    If m_CmdQueue Is Nothing Then Exit Function
+    If m_CmdQueue.Count = 0 Then Exit Function
+    DequeueCommand = m_CmdQueue(1)
+    m_CmdQueue.Remove 1
+End Function
+
+' -----------------------------------------------------------------------------
+' UrlDecode  -  decode encodeURIComponent() output (UTF-8 %XX sequences).
+'               encodeURIComponent emits %20 for space (never '+'), so '+' is
+'               left untouched. Non-ASCII is percent-encoded UTF-8 and rebuilt
+'               into a Unicode string via Utf8BytesToString.
+' -----------------------------------------------------------------------------
+Private Function UrlDecode(ByVal s As String) As String
+    Dim i As Long, ch As String
+    Dim bytes() As Byte, nb As Long
+    If Len(s) = 0 Then Exit Function
+    ReDim bytes(0 To Len(s) - 1)
+    nb = 0
+    i = 1
+    Do While i <= Len(s)
+        ch = Mid$(s, i, 1)
+        If ch = "%" And i + 2 <= Len(s) Then
+            bytes(nb) = CByte(CLng("&H" & Mid$(s, i + 1, 2)) And &HFF)
+            i = i + 3
+        Else
+            bytes(nb) = CByte(Asc(ch) And &HFF)
+            i = i + 1
+        End If
+        nb = nb + 1
+    Loop
+    UrlDecode = Utf8BytesToString(bytes, nb)
+End Function
+
+' -----------------------------------------------------------------------------
+' Utf8BytesToString  -  convert the first nb bytes of a UTF-8 byte array into a
+'                       VBA (UTF-16) string via ADODB.Stream.
+' -----------------------------------------------------------------------------
+Private Function Utf8BytesToString(ByRef b() As Byte, ByVal nb As Long) As String
+    On Error GoTo Fallback
+    If nb <= 0 Then Exit Function
+    Dim tmp() As Byte: ReDim tmp(0 To nb - 1)
+    Dim k As Long
+    For k = 0 To nb - 1: tmp(k) = b(k): Next k
+
+    Dim stm As Object: Set stm = CreateObject("ADODB.Stream")
+    stm.Type = 1                 ' adTypeBinary
+    stm.Open
+    stm.Write tmp
+    stm.Position = 0
+    stm.Type = 2                 ' adTypeText
+    stm.Charset = "utf-8"
+    Utf8BytesToString = stm.ReadText
+    stm.Close
+    Exit Function
+Fallback:
+    Dim s As String, j As Long
+    For j = 0 To nb - 1: s = s & Chr$(b(j)): Next j
+    Utf8BytesToString = s
 End Function

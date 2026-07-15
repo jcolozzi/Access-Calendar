@@ -58,13 +58,37 @@ const inAccess = !!(window.chrome && window.chrome.webview);
 const standalone = !inAccess;
 
 // ── VBA Bridge ───────────────────────────────────────────────────────────────
+// JS→VBA command channel. The Access EdgeBrowserControl (WebView2) exposes NO
+// WebMessageReceived event, and RetrieveJavascriptValue (the old polling
+// channel) is broken by WebView2 Runtime 149+. So each command is pushed to VBA
+// by navigating to a sentinel URL that the form's WebBrowser0_BeforeNavigate
+// handler intercepts and cancels. See cls/vba_form_code_behind.txt.
+const VBA_CMD_URL = 'https://msaccess/__cmd__?data=';
+let _cmdQueue = [];
+let _cmdDraining = false;
+
 function getPendingCommand() { return pendingCommand != null ? JSON.stringify(pendingCommand) : null; }
 function clearPendingCommand() { pendingCommand = null; setStatus('idle'); }
+
 function queueCommand(cmd) {
-  pendingCommand = cmd;
+  pendingCommand = cmd;                       // retained for standalone/legacy readers
   setStatus('pending', 'Saving\u2026');
-  if (window.chrome && window.chrome.webview)
-    window.chrome.webview.postMessage(JSON.stringify(cmd));
+  if (!inAccess) return;                      // standalone browser preview: no VBA to notify
+  _cmdQueue.push(cmd);
+  _drainCommandQueue();
+}
+
+// Serialize navigations so rapid back-to-back commands are not lost: fire one
+// sentinel navigation, let BeforeNavigate cancel it, then release for the next.
+function _drainCommandQueue() {
+  if (_cmdDraining || !_cmdQueue.length) return;
+  _cmdDraining = true;
+  const cmd = _cmdQueue.shift();
+  try {
+    window.location.href = VBA_CMD_URL +
+      encodeURIComponent(JSON.stringify(cmd)) + '&t=' + Date.now();
+  } catch (e) {}
+  setTimeout(function () { _cmdDraining = false; _drainCommandQueue(); }, 60);
 }
 
 // ── Primary data entry point (called by VBA) ──────────────────────────────────
