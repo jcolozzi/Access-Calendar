@@ -14,6 +14,7 @@ let addCalGroupId = null;
 let editingGroupId = null;
 let view = 'week', weekDays = 7;
 let cur = new Date(), today = new Date();
+let autoScrollNext = true;   // next week/day render scrolls to current time (set on navigation / initial load only)
 let editingId = null, dragEv = null, dragOffset = 0;
 let resizeEv = null, resizeEdge = null, resizeEl = null, resizeCol = null;
 let resizeOrigStart = '', resizeOrigEnd = '';
@@ -767,7 +768,7 @@ function startOfWorkWeek(d) { const r=new Date(d), day=r.getDay(); r.setDate(r.g
 
 document.getElementById('prev-btn').onclick  = () => navigate(-1);
 document.getElementById('next-btn').onclick  = () => navigate(1);
-document.getElementById('today-btn').onclick = () => { cur=new Date(); render(); };
+document.getElementById('today-btn').onclick = () => { cur=new Date(); navRender(); };
 
 // ── Month/Year picker ────────────────────────────────────────────────────────
 (function initMonthPicker() {
@@ -796,21 +797,26 @@ document.getElementById('today-btn').onclick = () => { cur=new Date(); render();
   document.getElementById('mp-go').addEventListener('click', () => {
     cur = new Date(parseInt(mpYear.value, 10), parseInt(mpMonth.value, 10), 1);
     closePicker();
-    render();
+    navRender();
   });
   document.getElementById('mp-cancel').addEventListener('click', closePicker);
   popup.addEventListener('click', e => e.stopPropagation());
   document.addEventListener('click', () => closePicker());
 })();
-document.querySelectorAll('.view-tab').forEach(t => { t.onclick = () => { view=t.dataset.view; render(); }; });
-document.getElementById('w5-btn').onclick = () => { weekDays=5; render(); };
-document.getElementById('w7-btn').onclick = () => { weekDays=7; render(); };
+document.querySelectorAll('.view-tab').forEach(t => { t.onclick = () => { view=t.dataset.view; navRender(); }; });
+document.getElementById('w5-btn').onclick = () => { weekDays=5; navRender(); };
+document.getElementById('w7-btn').onclick = () => { weekDays=7; navRender(); };
+
+// Render triggered by an explicit navigation (Today / prev / next / view or date
+// change): scroll the time grid to the current time. Data-refresh renders call
+// render() directly and keep the user's current scroll position instead.
+function navRender() { autoScrollNext = true; render(); }
 
 function navigate(dir) {
   if      (view==='month') cur.setMonth(cur.getMonth()+dir);
   else if (view==='week')  cur.setDate(cur.getDate()+dir*weekDays);
   else                     cur.setDate(cur.getDate()+dir);
-  render();
+  navRender();
 }
 
 document.addEventListener('click', e => {
@@ -821,7 +827,7 @@ document.addEventListener('click', e => {
       const ws  = weekDays===5 ? startOfWorkWeek(cur) : startOfWeek(cur);
       cur = addDays(ws, idx);
       view = 'day';
-      render();
+      navRender();
     }
   }
 });
@@ -2685,6 +2691,7 @@ class CalendarRenderer {
 
   // ── Week view ───────────────────────────────────────────────────────────────
   renderWeek() {
+    const prevScroll = (document.getElementById('week-body') || {}).scrollTop || 0;
     const sw = weekDays===5 ? startOfWorkWeek(cur) : startOfWeek(cur);
     const dates = Array.from({length:weekDays},(_,i)=>addDays(sw,i));
     const MONTHS=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
@@ -2709,11 +2716,12 @@ class CalendarRenderer {
     this.renderAlldayEvents(dates);
     this._app.drag.setupAlldayInteraction();
     this._app.drag.setupWeekInteraction();
-    this._scrollToNow();
+    this._applyScroll(prevScroll);
   }
 
   // ── Day view ────────────────────────────────────────────────────────────────
   renderDay() {
+    const prevScroll = (document.getElementById('week-body') || {}).scrollTop || 0;
     const MONTHS=['January','February','March','April','May','June','July','August','September','October','November','December'];
     const DAYS=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
     label.textContent = `${DAYS[cur.getDay()]}, ${MONTHS[cur.getMonth()]} ${cur.getDate()}, ${cur.getFullYear()}`;
@@ -2734,7 +2742,7 @@ class CalendarRenderer {
     this.renderAlldayEvents([new Date(cur)]);
     this._app.drag.setupAlldayInteraction();
     this._app.drag.setupWeekInteraction();
-    this._scrollToNow();
+    this._applyScroll(prevScroll);
   }
 
   // ── Timed-event rendering (week & day) ──────────────────────────────────────
@@ -2881,10 +2889,17 @@ class CalendarRenderer {
     });
   }
 
-  _scrollToNow() {
+  _applyScroll(prevScroll) {
     const body = document.getElementById('week-body');
     if (!body) return;
-    setTimeout(() => { body.scrollTop = Math.max(0, (new Date().getHours()-1)*56); }, 0);
+    if (autoScrollNext) {
+      // Intentional navigation / initial load: jump to the current time.
+      autoScrollNext = false;
+      setTimeout(() => { body.scrollTop = Math.max(0, (new Date().getHours()-1)*56); }, 0);
+    } else {
+      // Background data refresh (VBA loadData, edits): keep the user's scroll position.
+      setTimeout(() => { body.scrollTop = prevScroll; }, 0);
+    }
   }
 
   // ── Mini-month calendar ─────────────────────────────────────────────────────
@@ -2923,7 +2938,7 @@ class CalendarRenderer {
       wb.addEventListener('click', () => {
         cur = new Date(weekStart);
         view = 'week';
-        render();
+        navRender();
       });
       grid.appendChild(wb);
 
@@ -2943,7 +2958,7 @@ class CalendarRenderer {
         cell.addEventListener('click', () => {
           cur  = new Date(day);
           view = 'day';
-          render();
+          navRender();
         });
         grid.appendChild(cell);
       }
